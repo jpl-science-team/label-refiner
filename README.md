@@ -4,30 +4,6 @@ This repository provides a collection of tools for preparing, exploring, and ref
 The main objective is to generate clean, consistent YOLO‑style labels by leveraging the Segment Anything Model (SAM) for bounding box refinement.
 The repo is structured to allow dataset transformation, inspection, refinement, and experimental model training, all within a reproducible, isolated environment.
 
-Repository Structure
-label-refiner/
-│
-├── data_exploration/
-│   ├── explore_test_dataset.py
-│   └── explore_yolo_dataset.py
-│
-├── datasets/
-│   └── (COWC and derived YOLO-ready datasets — tracked in Git)
-│
-├── models/
-│   └── SAM checkpoints (tracked intentionally unless large)
-│
-├── scripts/
-│   ├── 00create_test_subset.py
-│   ├── 01refine_labels_with_sam.py
-│
-├── small-object-detection/
-│   └── training utilities and configs
-│
-├── requirements.txt
-├── README.md
-└── .gitignore
-
 
 Features
 ✔ Test Subset Generation
