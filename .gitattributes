@@ -4,3 +4,4 @@
 *.txt filter=lfs diff=lfs merge=lfs -text
 *.pth filter=lfs diff=lfs merge=lfs -text
 models/*.pth filter=lfs diff=lfs merge=lfs -text
+models/groundingdino/*.pth filter=lfs diff=lfs merge=lfs -text
