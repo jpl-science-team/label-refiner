@@ -80,8 +80,8 @@ def copy_subset(dataset_name, base_input, base_output, sample_count=200):
 def main():
     random.seed(42)
 
-    base_input = "../datasets"
-    base_output = "../datasets/cowc_test_subset"
+    base_input = "datasets"
+    base_output = "datasets/cowc_test_subset"
 
     datasets = ["cowc", "cowc_rgb_1m", "cowc_rgb_05m"]
 
