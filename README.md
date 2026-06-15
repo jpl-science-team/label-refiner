@@ -1,97 +1,98 @@
-Label Refiner & Small Object Detection Tools
-This repository provides a collection of tools for preparing, exploring, and refining small-object datasets—specifically targeting the COWC variants and other aerial imagery sources.
+# Label Refiner & Small Object Detection Tools
 
-The main objective is to generate clean, consistent YOLO-style labels by leveraging the Segment Anything Model (SAM) and Personalized SAM (PerSAM) for bounding box refinement. The repo is structured to allow dataset transformation, inspection, refinement, and experimental model training, all within a reproducible, isolated environment.
+This repository provides an automated pipeline for preparing, exploring, and refining small-object datasets—specifically targeting COWC variants and other aerial imagery sources. 
 
-Features
-Test Subset Generation: 00create_test_subset.py extracts a small sample of each dataset (images + labels only) for rapid iteration.
+The primary objective is to generate clean, consistent YOLO-style labels by leveraging the **Segment Anything Model (SAM)** and **Personalized SAM (PerSAM)** for bounding box refinement. The repository is structured to handle dataset transformation, inspection, automated quality filtering, and experimental split locking within a reproducible, isolated environment.
 
-YOLO Label Refinement with SAM: 01refine_labels_with_sam.py improves YOLO bounding boxes using mask-derived bounding boxes from SAM, preserving originals if refinement fails.
+---
 
-PerSAM Precision Refinement: cowc_persam_refine_obb.py uses DINOv2 feature matching, dynamic bounding box shrinking, and morphological erosion to tightly bound densely clustered vehicles at 15m/pixel resolutions.
+## 🚀 Features
 
-Dataset Exploration Tools: Quick utilities in data_exploration/ provide visualizations of YOLO datasets.
+* **Test Subset Generation:** `00create_test_subset.py` extracts a lightweight sample of each dataset (images + labels) for rapid pipeline debugging. All scripts starting with 00 are for testing/cleaning purposes and do not effect the current pipeline.
+* **PerSAM Precision Refinement:** `01_cowc_persam_generate_dataset.py` leverages DINOv2 feature matching, dynamic bounding box shrinking, and morphological erosion to tightly bound densely clustered vehicles at 15m/pixel resolutions.
+* **Automated Quality Filtering:** `00clean_refined_dir.py` cross-references a `needs_refinement` blacklist folder to instantly purge problematic imagery and labels from your generated sets.
+* **Deterministic Split Locking:** `02lock_cowc_yolo_dataset.py` pools generated data, shuffles it with a fixed random seed, and locks in a clean **80% Train / 15% Val / 5% Test** YOLOv8-compliant distribution ready for deployment.
+* **Dataset Exploration Tools:** Interactive inspection utilities located in `data_exploration/` provide bounding box visualizations and localized zooming.
 
-Environment Setup
-To avoid conflicts and ensure all scripts run as expected, create a clean environment specifically for this repo.
+---
 
-1. Clone the Repository
-First, bring the code down to your local machine:
-Bash
+## 🛠️ Environment Setup
+
+To avoid dependency conflicts and ensure all scripts execute correctly, build an isolated environment specifically for this repository.
+
+### 1. Clone the Repository
+```bash
 git clone https://github.jpl.nasa.gov/science-team-algorithms/label-refiner.git
 cd label-refiner
-
 2. Create & Activate Environment
 Using Conda (Recommended):
+
 Bash
 conda create -n label-refiner python=3.10 -y
 conda activate label-refiner
-
 Using venv:
+
 Bash
 python3 -m venv .env
 source .env/bin/activate  # macOS/Linux
 .env\Scripts\activate     # Windows
-
 3. Install Dependencies
-Since you already maintain a requirements.txt, run:
-
 Bash
 pip install -r requirements.txt
-(Note: If using a specific PyTorch backend—CUDA or MPS—update the Torch lines in your requirements file accordingly before running this command).
+⚠️ Note: If utilizing a specific hardware acceleration backend (e.g., NVIDIA CUDA or Apple Silicon MPS), verify your PyTorch and Torchvision lines in requirements.txt align with your hardware before running the installation.
 
-Handling Large Files (Git LFS)
-This repository uses Git Large File Storage (LFS) to manage large model weights (like the SAM .pth checkpoints). If you clone the repository and your model files are only a few bytes in size (containing text pointers instead of the actual weights), you need to pull the LFS files.
+📦 Handling Large Files (Git LFS)
+This repository utilizes Git Large File Storage (LFS) to manage large model weights, such as the SAM .pth checkpoints. If you clone the repository and notice that the model files are only a few bytes in size (containing text pointers instead of actual weights), pull the binary assets manually.
 
-1. Install Git LFS
-If you haven't already, install Git LFS on your machine:
-
+1. Install Git LFS (If needed)
 Bash
 git lfs install
-2. Pull the Tracked Files
-To download the actual heavy files stored in LFS for this repository, run:
-
+2. Pull Tracked Binary Assets
 Bash
 git lfs pull
+🏁 Quickstart Workflow
+Follow these steps to process a raw dataset from start to finish.
 
-
-Quickstart Workflow
-1. Place Datasets
-Datasets should live inside the datasets/ directory:
+1. Place Source Datasets
+Ensure your raw imagery datasets are positioned inside the datasets/ root directory:
 
 Plaintext
 datasets/
     ├── cowc/
     ├── cowc_rgb_1m/
     └── cowc_rgb_05m/
-2. Create a Small Test Subset
-Extract a lightweight test set to rapidly test your pipeline:
+2. Add Your SAM Checkpoint
+Place your downloaded Segment Anything model weights inside the models/ directory:
 
-Bash
-python scripts/00create_test_subset.py
-Output will appear under: datasets/cowc_test_subset/
-
-3. Add Your SAM Checkpoint
-Place your downloaded model weights inside the models/ directory:
 Plaintext
-models/sam_vit_b.pth
-
-4. Run PerSAM Bounding Box Refinement
-To use the advanced Personalized SAM script for tightly packed vehicles, ensure you have your visual templates (ref_car.png and ref_mask.png) placed in your dataset folder. 
-
-Then run:
-Bash
-python scripts/cowc_rgb_1m_persam_refine_obb.py
-Results will be written to: datasets/cowc_test_refined/
-
-(If you just want standard SAM refinement, you can still run python scripts/01refine_labels_with_sam.py)
-
-5. Explore the Dataset
-Visualize the original or refined YOLO bounding boxes drawn directly onto the images to verify your results:
+models/
+    └── sam_vit_b.pth
+3. Generate the Refined Labels
+Execute the PerSAM pipeline to refine your target dataset layout:
 
 Bash
-python data_exploration/explore_test_dataset.py
+python scripts/01cowc_persam_generate_dataset.py
+Outputs will be generated to: datasets_refined/cowc/
 
-Contributors
-Bridgit Graddy
-Lead contributor to dataset processing, label refinement, and pipeline development.
+4. Purge Quality Blacklists
+Bash
+python data_exploration/val_yolo_dataset.py
+
+If you have run the interactive dataset inspector tool and generated a needs_refinement/ folder containing images that failed validation, run the automated purge script to safely delete them from your newly generated data:
+
+Bash
+python scripts/00clean_refined_dir.py
+5. Lock and Freeze the Baseline Split
+Pool all remaining clean imagery together, shuffle them deterministically, and lock them into a frozen 80/15/5 distribution complete with a relative-pathed data.yaml:
+
+Bash
+python scripts/02lock_cowc_yolo_dataset.py
+Outputs will be written to: processed_datasets/20260615_42_cowc_base/ #update as follows <date_seed_dataset>
+
+6. Zip and Export
+Compress the finalized, locked baseline package so it can be moved to your training repository:
+
+Bash
+zip -r 20260615_42_cowc_base.zip processed_datasets/20260615_42_cowc_base
+👥 Contributors
+Bridgit Graddy — Lead contributor to dataset processing, label refinement architectures, and pipeline automation development.
