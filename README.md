@@ -6,7 +6,7 @@ The primary objective is to generate clean, consistent YOLO-style labels by leve
 
 
 **Author: Bridgit Graddy, JPL Summer Intern, 2026** <br>
-bgraddy@broncos.uncfsu.edu <br>>
+bgraddy@broncos.uncfsu.edu <br>
 Mentors: Emily Dunkel and Mike Burl
 
 ---
