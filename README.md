@@ -69,18 +69,20 @@ Follow these steps to process a raw dataset from start to finish.
 ####  1. Place Source Datasets
 Ensure your raw imagery datasets are positioned inside the datasets/ root directory:
 
-Plaintext
+```text
 datasets/
     ├── cowc/
     ├── cowc_rgb_1m/
     └── cowc_rgb_05m/
+```
 
 #### 2. Add Your SAM Checkpoint
 Place your downloaded Segment Anything model weights inside the models/ directory:
 
-Plaintext
+```text
 models/
     └── sam_vit_b.pth
+```
 
 #### 3. Generate the Refined Labels
 Execute the PerSAM pipeline to refine your target dataset layout:
