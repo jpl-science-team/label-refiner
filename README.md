@@ -101,22 +101,30 @@ Execute the PerSAM pipeline to refine your target dataset layout:
 
 ```bash
 python scripts/01cowc_persam_generate_dataset.py
-Outputs will be generated to: datasets_refined/cowc/
 ```
 
-#### 4. Purge Quality Blacklists
+Outputs will be generated to: datasets_refined/cowc/
+
+#### 4. Inspect the Data 
+
+You can inspect the data by running:
 
 ```bash
 python data_exploration/val_yolo_dataset.py
 ```
 
+You will get an interactive tool that has you open up a file. To see your newly refined datasets, select folder: datasets_refined/cowc
+
+Then, you can flip through the different images.
+
+#### 5. Purge Datset
 If you have run the interactive dataset inspector tool and generated a needs_refinement/ folder containing images that failed validation, run the automated purge script to safely delete them from your newly generated data:
 
 ```bash
 python scripts/00clean_refined_dir.py
 ```
 
-#### 5. Lock and Freeze the Baseline Split
+#### 6. Lock and Freeze the Baseline Split (this is being updated by Bridgit, original splits had data leakage)
 Pool all remaining clean imagery together, shuffle them deterministically, and lock them into a frozen 80/15/5 distribution complete with a relative-pathed data.yaml:
 
 ```bash
@@ -125,7 +133,7 @@ python scripts/02lock_cowc_yolo_dataset.py
 
 Outputs will be written to: processed_datasets/20260615_42_cowc_base/ #update as follows <date_seed_dataset>
 
-#### 6. Zip and Export
+#### 7. Zip and Export
 Compress the finalized, locked baseline package so it can be moved to your training repository:
 
 ```bash
