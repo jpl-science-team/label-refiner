@@ -21,78 +21,104 @@ The primary objective is to generate clean, consistent YOLO-style labels by leve
 To avoid dependency conflicts and ensure all scripts execute correctly, build an isolated environment specifically for this repository.
 
 ### 1. Clone the Repository
+
 ```bash
 git clone https://github.jpl.nasa.gov/science-team-algorithms/label-refiner.git
 cd label-refiner
-2. Create & Activate Environment
-Using Conda (Recommended):
+```
 
-Bash
+### 2. Create & Activate Environment
+
+```bash
+# using conda (recommended):
 conda create -n label-refiner python=3.10 -y
 conda activate label-refiner
-Using venv:
 
-Bash
+# alternatively, using venv:
 python3 -m venv .env
 source .env/bin/activate  # macOS/Linux
 .env\Scripts\activate     # Windows
-3. Install Dependencies
-Bash
+```
+
+### 3. Install Dependencies
+
+```bash
 pip install -r requirements.txt
+```
+
 ⚠️ Note: If utilizing a specific hardware acceleration backend (e.g., NVIDIA CUDA or Apple Silicon MPS), verify your PyTorch and Torchvision lines in requirements.txt align with your hardware before running the installation.
 
 📦 Handling Large Files (Git LFS)
 This repository utilizes Git Large File Storage (LFS) to manage large model weights, such as the SAM .pth checkpoints. If you clone the repository and notice that the model files are only a few bytes in size (containing text pointers instead of actual weights), pull the binary assets manually.
 
-1. Install Git LFS (If needed)
-Bash
+A. Install Git LFS (If needed)
+
+```bash
 git lfs install
-2. Pull Tracked Binary Assets
-Bash
+```
+
+B. Pull Tracked Binary Assets
+
+```bash
 git lfs pull
-🏁 Quickstart Workflow
+```
+
+### 🏁 Quickstart Workflow
 Follow these steps to process a raw dataset from start to finish.
 
-1. Place Source Datasets
+####  1. Place Source Datasets
 Ensure your raw imagery datasets are positioned inside the datasets/ root directory:
 
-Plaintext
+```text
 datasets/
     ├── cowc/
     ├── cowc_rgb_1m/
     └── cowc_rgb_05m/
-2. Add Your SAM Checkpoint
+```
+
+#### 2. Add Your SAM Checkpoint
 Place your downloaded Segment Anything model weights inside the models/ directory:
 
-Plaintext
+```text
 models/
     └── sam_vit_b.pth
-3. Generate the Refined Labels
+```
+
+#### 3. Generate the Refined Labels
 Execute the PerSAM pipeline to refine your target dataset layout:
 
-Bash
+```bash
 python scripts/01cowc_persam_generate_dataset.py
 Outputs will be generated to: datasets_refined/cowc/
+```
 
-4. Purge Quality Blacklists
-Bash
+#### 4. Purge Quality Blacklists
+
+```bash
 python data_exploration/val_yolo_dataset.py
+```
 
 If you have run the interactive dataset inspector tool and generated a needs_refinement/ folder containing images that failed validation, run the automated purge script to safely delete them from your newly generated data:
 
-Bash
+```bash
 python scripts/00clean_refined_dir.py
-5. Lock and Freeze the Baseline Split
+```
+
+#### 5. Lock and Freeze the Baseline Split
 Pool all remaining clean imagery together, shuffle them deterministically, and lock them into a frozen 80/15/5 distribution complete with a relative-pathed data.yaml:
 
-Bash
+```bash
 python scripts/02lock_cowc_yolo_dataset.py
+```
+
 Outputs will be written to: processed_datasets/20260615_42_cowc_base/ #update as follows <date_seed_dataset>
 
-6. Zip and Export
+#### 6. Zip and Export
 Compress the finalized, locked baseline package so it can be moved to your training repository:
 
-Bash
+```bash
 zip -r 20260615_42_cowc_base.zip processed_datasets/20260615_42_cowc_base
+```
+
 👥 Contributors
 Bridgit Graddy — Lead contributor to dataset processing, label refinement architectures, and pipeline automation development.
