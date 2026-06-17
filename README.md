@@ -16,6 +16,13 @@ The primary objective is to generate clean, consistent YOLO-style labels by leve
 
 ---
 
+## Large Files on Google Drive
+
+The Science Team shared drive is located: https://drive.google.com/drive/folders/0AOVva14csqXNUk9PVA
+
+Please contact Emily Dunkel for access to drive.
+
+
 ## 🛠️ Environment Setup
 
 To avoid dependency conflicts and ensure all scripts execute correctly, build an isolated environment specifically for this repository.
