@@ -5,8 +5,8 @@ This repository provides an automated pipeline for preparing, exploring, and ref
 The primary objective is to generate clean, consistent YOLO-style labels by leveraging the **Segment Anything Model (SAM)** and **Personalized SAM (PerSAM)** for bounding box refinement. The repository is structured to handle dataset transformation, inspection, automated quality filtering, and experimental split locking within a reproducible, isolated environment.
 
 
-Author: Bridgit Graddy, 2026
-
+**Author: Bridgit Graddy, 2026**
+** bridgit.graddy@jpl.nasa.gov**
 Mentors: Emily Dunkel and Mike Burl
 
 ---
