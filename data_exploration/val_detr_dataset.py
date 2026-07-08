@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Interactive viewer for inspecting YOLO training data. Loads images and their
-corresponding label files, overlays standard or oriented bounding boxes, and
-provides a live zoom window that follows the mouse cursor. 
+Interactive viewer for inspecting DETR/DOTA training data. Loads images and their
+corresponding label files, overlays standard or oriented bounding boxes using
+absolute pixel coordinates, and provides a live zoom window that follows the mouse cursor.
 
 Supports fast keyboard-based navigation:
 - [A] / [Left Arrow] : Previous Image
@@ -21,10 +21,10 @@ from pathlib import Path
 # --- CONFIGURATION ---
 ZOOM_LEVEL = 8
 CROP_SIZE = 80
-WINDOW_NAME = "COWC Inspector"
+WINDOW_NAME = "COWC DETR Inspector"
 DISPLAY_HEIGHT = 800  # Adjust this to fit your screen
 
-# TARGET SPLIT SELECTION: Change this to "train", "val", or "test"
+# TARGET SPLIT SELECTION: Change this to "train" or "val"
 SPLIT = "train" 
 # ---------------------
 
@@ -42,16 +42,15 @@ def mouse_callback(event, x, y, flags, param):
 def get_dataset_root():
     root = tk.Tk()
     root.withdraw()
-    folder = filedialog.askdirectory(title="Select YOLO Root Dataset Directory")
+    folder = filedialog.askdirectory(title="Select DETR/DOTA Root Dataset Directory (e.g. data/cowc_512_detr)")
     root.destroy()
     return folder
 
-def draw_labels(img, label_path, alpha=0.7):
+def draw_labels_detr(img, label_path, alpha=0.7):
     """
-    Draws semi-transparent bounding boxes.
+    Draws semi-transparent bounding boxes using DETR/DOTA absolute coordinates.
     alpha: 0.0 to 1.0 (transparency level)
     """
-    h, w, _ = img.shape
     if not os.path.exists(label_path): 
         return img
 
@@ -60,22 +59,30 @@ def draw_labels(img, label_path, alpha=0.7):
     
     with open(label_path, 'r') as f:
         for line in f.readlines():
-            parts = line.split()
-            if len(parts) < 3: continue
+            parts = line.strip().split()
+            if len(parts) < 8: continue
             
             # Color and Thickness
-            color = (0, 255, 255) # Yellow for OBB
+            color = (0, 255, 0) # Green for verified OBB targets
             
-            if len(parts) >= 9: # YOLO OBB (8 coordinates + 1 class_id)
-                coords = list(map(float, parts[1:9]))
-                pts = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0,8,2)], np.int32)
-                cv2.polylines(overlay, [pts.reshape((-1,1,2))], True, color, 1)
+            try:
+                # DETR format uses absolute integers directly
+                pts = np.array([
+                    [int(parts[0]), int(parts[1])],
+                    [int(parts[2]), int(parts[3])],
+                    [int(parts[4]), int(parts[5])],
+                    [int(parts[6]), int(parts[7])]
+                ], dtype=np.int32)
                 
-            elif len(parts) == 5: # Standard YOLO (class, cx, cy, w, h)
-                _, x, y, bw, bh = map(float, parts[:5])
-                p1 = (int((x-bw/2)*w), int((y-bh/2)*h))
-                p2 = (int((x+bw/2)*w), int((y+bh/2)*h))
-                cv2.rectangle(overlay, p1, p2, (0, 255, 0), -1) 
+                # Draw true oriented polygon contour outline on overlay
+                cv2.polylines(overlay, [pts.reshape((-1, 1, 2))], True, color, 1)
+                
+                # Optional: text tag right above the first corner coordinate 
+                class_name = parts[8] if len(parts) > 8 else "vehicle"
+                cv2.putText(overlay, class_name, (pts[0][0], max(12, pts[0][1] - 3)), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+            except ValueError:
+                continue # Guard against text header contamination
 
     # Blend the overlay with the original image
     combined = cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
@@ -100,7 +107,8 @@ def main():
         print(f"Please verify your current layout matches the selected split: [{SPLIT}]")
         return
 
-    img_files = sorted([f for f in os.listdir(img_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+    # Updated pattern filters to support broad extensions
+    img_files = sorted([f for f in os.listdir(img_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png', '.tif', '.tiff'))])
     
     if not img_files: 
         print(f"No images found inside target directory: {img_dir}")
@@ -110,7 +118,7 @@ def main():
     cv2.namedWindow(WINDOW_NAME)
     cv2.setMouseCallback(WINDOW_NAME, mouse_callback)
 
-    print(f"🚀 Inspector started. Mode: [{SPLIT.upper()}] split visualization pipeline.")
+    print(f"🚀 DETR Inspector started. Mode: [{SPLIT.upper()}] split visualization pipeline.")
 
     while True:
         if not img_files:
@@ -128,7 +136,8 @@ def main():
             if img_files: idx = idx % len(img_files)
             continue
         
-        labeled_img = draw_labels(raw_img.copy(), lbl_path)
+        # Swapped to our new DETR parsing loop
+        labeled_img = draw_labels_detr(raw_img.copy(), lbl_path)
         h, w, _ = labeled_img.shape
 
         combined_w = w + h 
@@ -149,12 +158,12 @@ def main():
             # ---------------------------------------------------------
             # Draw UI instructions and File Progress
             # ---------------------------------------------------------
-            cv2.putText(zoom_pane, f"SPLIT: {SPLIT.upper()}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.putText(zoom_pane, f"DETR SPLIT: {SPLIT.upper()}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             cv2.putText(zoom_pane, "[M] Move to Refine", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             
             # File/Progress Trackers
-            cv2.putText(zoom_pane, f"File: {img_name}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(zoom_pane, f"Progress: {idx + 1} / {len(img_files)}", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(zoom_pane, f"File: {img_name}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(zoom_pane, f"Progress: {idx + 1} / {len(img_files)}", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
             # 3. Create Main Pane
             main_pane = labeled_img.copy()

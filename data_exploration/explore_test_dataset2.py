@@ -1,155 +1,188 @@
+#!/usr/bin/env python3
 """
-Interactive viewer for inspecting refined training data. Loads images and their
+Interactive viewer for inspecting YOLO training data. Loads images and their
 corresponding label files, overlays standard or oriented bounding boxes, and
-provides a live zoom window that follows the mouse cursor. Supports fast
-keyboard-based navigation for reviewing annotation quality across a dataset.
+provides a live zoom window that follows the mouse cursor. 
 """
 import cv2
 import os
+import shutil
 import numpy as np
 import tkinter as tk
 from tkinter import filedialog
 from pathlib import Path
 
-WINDOW_NAME = "Dataset Explorer"
-ZOOM_SIZE = 80
-ZOOM_SCALE = 8
-DISPLAY_HEIGHT = 800
+# --- CONFIGURATION ---
+ZOOM_LEVEL = 8
+CROP_SIZE = 80
+WINDOW_NAME = "COWC Inspector"
+DISPLAY_HEIGHT = 800  
 
-mouse_pos = [0, 0]
+# TARGET SPLIT SELECTION: Change this to "train", "val", or "test"
+SPLIT = "train" 
+# ---------------------
+
+# Global state
+mouse_raw = [0, 0]
 scale_factor = 1.0
 
 def mouse_callback(event, x, y, flags, param):
-    global mouse_pos, scale_factor
+    global mouse_raw, scale_factor
     if event == cv2.EVENT_MOUSEMOVE:
-        mouse_pos[0] = int(x / scale_factor)
-        mouse_pos[1] = int(y / scale_factor)
+        mouse_raw[0] = int(x / scale_factor)
+        mouse_raw[1] = int(y / scale_factor)
 
-def choose_dataset_folder():
+def get_dataset_root():
     root = tk.Tk()
     root.withdraw()
-    folder = filedialog.askdirectory(title="Select dataset folder containing images & labels")
+    folder = filedialog.askdirectory(title="Select YOLO Root Dataset Directory")
     root.destroy()
-    return Path(folder) if folder else None
+    return folder
 
-def draw_labels(img, lbl_path):
-    h, w = img.shape[:2]
-    if not lbl_path.exists():
+def draw_labels(img, label_path, alpha=0.7):
+    h, w, _ = img.shape
+    if not os.path.exists(label_path): 
         return img
 
-    fill_overlay = img.copy()
-    alpha = 0.35  # Transparency level for the box fill
+    overlay = img.copy()
+    with open(label_path, 'r') as f:
+        for line in f.readlines():
+            parts = line.split()
+            if len(parts) < 3: continue
+            
+            color = (0, 255, 255) # Yellow for OBB
+            
+            if len(parts) >= 9: 
+                coords = list(map(float, parts[1:9]))
+                pts = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0,8,2)], np.int32)
+                cv2.polylines(overlay, [pts.reshape((-1,1,2))], True, color, 1)
+                
+            elif len(parts) == 5: 
+                _, x, y, bw, bh = map(float, parts[:5])
+                p1 = (int((x-bw/2)*w), int((y-bh/2)*h))
+                p2 = (int((x+bw/2)*w), int((y+bh/2)*h))
+                cv2.rectangle(overlay, p1, p2, (0, 255, 0), -1) 
 
-    # Storing points to draw the crisp 1-pixel borders AFTER blending the fill
-    polygons = []
-    rectangles = []
-
-    with open(lbl_path, "r") as f:
-        for line in f:
-            parts = line.strip().split()
-            if not parts:
-                continue
-            vals = list(map(float, parts[1:]))
-
-            # Polygon / oriented YOLO
-            if len(vals) == 8:
-                pts = np.array([[vals[i]*w, vals[i+1]*h] for i in range(0,8,2)], np.int32)
-                # Draw solid fill on the overlay
-                cv2.fillPoly(fill_overlay, [pts], (0, 255, 255))
-                polygons.append(pts)
-
-            # Standard YOLO
-            elif len(vals) == 4:
-                cx, cy, bw, bh = vals
-                x1 = int((cx - bw/2) * w)
-                y1 = int((cy - bh/2) * h)
-                x2 = int((cx + bw/2) * w)
-                y2 = int((cy + bh/2) * h)
-                # Draw solid fill on the overlay
-                cv2.rectangle(fill_overlay, (x1, y1), (x2, y2), (0, 255, 0), -1)
-                rectangles.append((x1, y1, x2, y2))
-
-    # Blend the painted overlay with the original image to create transparency
-    blended = cv2.addWeighted(fill_overlay, alpha, img, 1 - alpha, 0)
-
-    # Draw the sharp 1-pixel borders on top of the blended image
-    for pts in polygons:
-        cv2.polylines(blended, [pts.reshape((-1, 1, 2))], True, (0, 255, 255), 1)
-        
-    for (x1, y1, x2, y2) in rectangles:
-        cv2.rectangle(blended, (x1, y1), (x2, y2), (0, 255, 0), 1)
-
-    return blended
+    return cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
 
 def main():
     global scale_factor
+    root_path = get_dataset_root()
+    if not root_path: return
 
-    root = choose_dataset_folder()
-    if root is None:
-        print("No dataset chosen.")
+    root_dir = Path(root_path)
+    
+    # Case-insensitive resolution for the split directory (e.g., train vs TRAIN)
+    split_dir = None
+    for item in root_dir.iterdir():
+        if item.is_dir() and item.name.lower() == SPLIT.lower():
+            split_dir = item
+            break
+            
+    if split_dir is None:
+        split_dir = root_dir / SPLIT
+
+    # Target nested directories based on what we discovered
+    img_dir = split_dir / "images"
+    lbl_dir = split_dir / "labels"
+    
+    # Mirroring structure inside needs_refinement
+    refine_img_dir = root_dir / "needs_refinement" / SPLIT / "images"
+    refine_lbl_dir = root_dir / "needs_refinement" / SPLIT / "labels"
+    
+    if not img_dir.exists():
+        print(f"Images directory missing: {img_dir}")
         return
 
-    img_dir = root / "images"
-    lbl_dir = root / "labels"
-
-    if not img_dir.exists() or not lbl_dir.exists():
-        print("Dataset must contain /images and /labels folders.")
-        return
-
-    img_files = sorted([f for f in os.listdir(img_dir)
-                        if f.lower().endswith(('.png','.jpg','.jpeg'))])
-
-    if not img_files:
-        print("No images found.")
+    # Scan the internal images directory
+    valid_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff')
+    img_files = sorted([
+        f for f in os.listdir(img_dir) 
+        if f.lower().endswith(valid_exts)
+    ])
+    
+    if not img_files: 
+        print(f"No images found inside target directory: {img_dir}")
         return
 
     idx = 0
     cv2.namedWindow(WINDOW_NAME)
     cv2.setMouseCallback(WINDOW_NAME, mouse_callback)
 
+    print(f"🚀 Inspector started. Mode: [{SPLIT.upper()}] split visualization pipeline.")
+
     while True:
-        img_path = img_dir / img_files[idx]
-        lbl_path = lbl_dir / (img_files[idx].rsplit('.', 1)[0] + ".txt")
+        if not img_files:
+            print("All images have been processed or moved. Exiting.")
+            break
 
-        img = cv2.imread(str(img_path))
-        if img is None:
-            idx = (idx + 1) % len(img_files)
+        img_name = img_files[idx]
+        img_path = os.path.join(img_dir, img_name)
+        
+        base_name = img_name.rsplit('.', 1)[0]
+        lbl_name = base_name + ".txt"
+        lbl_path = os.path.join(lbl_dir, lbl_name)
+        
+        raw_img = cv2.imread(img_path)
+        if raw_img is None: 
+            img_files.pop(idx)
+            if img_files: idx = idx % len(img_files)
             continue
+        
+        labeled_img = draw_labels(raw_img.copy(), lbl_path)
+        h, w, _ = labeled_img.shape
 
-        labeled = draw_labels(img.copy(), lbl_path)
-        h, w = labeled.shape[:2]
-
+        combined_w = w + h 
         scale_factor = DISPLAY_HEIGHT / h
 
-        # cursor pos in original coords
-        mx, my = mouse_pos
-        mx = int(np.clip(mx, 0, w - 1))
-        my = int(np.clip(my, 0, h - 1))
+        while True:
+            mx, my = mouse_raw
+            zx, zy = np.clip(mx, 0, w), np.clip(my, 0, h)
+            x1, y1 = max(0, zx - CROP_SIZE//2), max(0, zy - CROP_SIZE//2)
+            x2, y2 = min(w, zx + CROP_SIZE//2), min(h, zy + CROP_SIZE//2)
+            
+            roi = labeled_img[y1:y2, x1:x2]
+            zoom_pane = cv2.resize(roi, (h, h), interpolation=cv2.INTER_NEAREST)
+            
+            cv2.putText(zoom_pane, f"SPLIT: {SPLIT.upper()}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.putText(zoom_pane, "[M] Move to Refine", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(zoom_pane, f"File: {img_name}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(zoom_pane, f"Progress: {idx + 1} / {len(img_files)}", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-        # zoom crop
-        x1 = max(mx - ZOOM_SIZE//2, 0)
-        y1 = max(my - ZOOM_SIZE//2, 0)
-        x2 = min(mx + ZOOM_SIZE//2, w)
-        y2 = min(my + ZOOM_SIZE//2, h)
-        roi = labeled[y1:y2, x1:x2]
+            main_pane = labeled_img.copy()
+            cv2.drawMarker(main_pane, (mx, my), (0, 0, 255), cv2.MARKER_CROSS, 30, 2)
 
-        zoom = cv2.resize(roi, (h, h), interpolation=cv2.INTER_NEAREST)
-        cv2.putText(zoom, "ZOOM", (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
+            combined = np.hstack((main_pane, zoom_pane))
+            final_w = int(combined_w * scale_factor)
+            display_frame = cv2.resize(combined, (final_w, DISPLAY_HEIGHT))
 
-        combined = np.hstack([labeled, zoom])
-        disp_w = int(combined.shape[1] * scale_factor)
-        frame = cv2.resize(combined, (disp_w, DISPLAY_HEIGHT))
-
-        cv2.imshow(WINDOW_NAME, frame)
-
-        key = cv2.waitKey(10) & 0xFF
-
-        if key in (ord('q'), 27):
-            break
-        elif key in (ord('d'), 83, 3):   # right / next
-            idx = (idx + 1) % len(img_files)
-        elif key in (ord('a'), 81, 2):   # left / prev
-            idx = (idx - 1) % len(img_files)
+            cv2.imshow(WINDOW_NAME, display_frame)
+            
+            key = cv2.waitKey(15) 
+            if key != -1:
+                k = key & 0xFF
+                
+                if k == ord('q') or k == 27: 
+                    return
+                if k == ord('d') or key in [2555904, 83, 3]: 
+                    idx = (idx + 1) % len(img_files)
+                    break
+                if k == ord('a') or key in [2424832, 81, 2]: 
+                    idx = (idx - 1) % len(img_files)
+                    break
+                if k == ord('m'):
+                    refine_img_dir.mkdir(parents=True, exist_ok=True)
+                    refine_lbl_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    shutil.move(img_path, refine_img_dir / img_name)
+                    if os.path.exists(lbl_path):
+                        shutil.move(lbl_path, refine_lbl_dir / lbl_name)
+                        
+                    print(f"Moved [{SPLIT.upper()}]: {img_name} -> needs_refinement/{SPLIT}/images/")
+                    img_files.pop(idx)
+                    if img_files:
+                        idx = idx % len(img_files) 
+                    break
 
     cv2.destroyAllWindows()
 

@@ -9,12 +9,17 @@ import torch.nn.functional as F
 from pathlib import Path
 from segment_anything import sam_model_registry, SamPredictor
 
+# Shapely components for clean geometric transformations
+import shapely
+from shapely.geometry import Polygon
+from shapely.affinity import translate
+
 # ---------------------------------------------------------
 # 1. PerSAM Visual Weights Extractor
 # ---------------------------------------------------------
 def get_persam_weights(predictor, ref_image, ref_mask):
     """
-    Extracts persam visual features from the reference template 
+    Extracts DINOv2 visual features from the reference template 
     so SAM recognizes the custom styling and texture of the vehicles.
     """
     with torch.no_grad():
@@ -31,12 +36,12 @@ def get_persam_weights(predictor, ref_image, ref_mask):
     return target_weight
 
 # ---------------------------------------------------------
-# 2. Mask → Normalized YOLO OBB Converter
+# 2. Mask → Local 512 Pixel Coordinates
 # ---------------------------------------------------------
-def mask_to_yolo_obb(mask, img_w, img_h):
+def mask_to_local_obb_points(mask):
     """
-    Converts binary masks into a 4-point structural Oriented Bounding Box (OBB).
-    Includes defensive filtering to reject giant hallucinations and noise.
+    Converts binary masks into raw local 4-point coordinates 
+    so Shapely can translate them before YOLO normalization.
     """
     contours, _ = cv2.findContours(mask.astype("uint8"), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -68,12 +73,7 @@ def mask_to_yolo_obb(mask, img_w, img_h):
     tr = right_pts[np.argsort(right_pts[:, 1])[0]]
     br = right_pts[np.argsort(right_pts[:, 1])[1]]
     
-    return [
-        tl[0] / img_w, tl[1] / img_h,
-        tr[0] / img_w, tr[1] / img_h,
-        br[0] / img_w, br[1] / img_h,
-        bl[0] / img_w, bl[1] / img_h
-    ]
+    return [tl, tr, br, bl]
 
 # ---------------------------------------------------------
 # 3. Post-Processing Geometric Correction Head
@@ -169,9 +169,9 @@ def load_sam(model_path="models/sam_vit_b.pth"):
     return predictor, device
 
 # ---------------------------------------------------------
-# 5. Main Datasets Processing Loop
+# 5. Main Datasets Processing Loop (1024 -> 512 -> 1024)
 # ---------------------------------------------------------
-def refine_dataset_persam(input_dir, output_dir, predictor, ref_img_path, ref_mask_path):
+def refine_dataset_persam_tiled(input_dir, output_dir, predictor, ref_img_path, ref_mask_path):
     input_root = Path(input_dir)
     output_root = Path(output_dir)
     
@@ -190,7 +190,7 @@ def refine_dataset_persam(input_dir, output_dir, predictor, ref_img_path, ref_ma
 
     splits = ["train", "val", "test"]
 
-    print(f"\n=== Running PerSAM Refinement Pipeline ===")
+    print(f"\n=== Running PerSAM 1024->512 Tiled Refinement Pipeline ===")
 
     for split in splits:
         in_img_dir = input_root / "images" / split
@@ -226,56 +226,84 @@ def refine_dataset_persam(input_dir, output_dir, predictor, ref_img_path, ref_ma
             with open(lbl_path) as f:
                 lines = f.read().strip().splitlines()
 
-            refined_labels = []
-            predictor.set_image(img)
-
-            # Extract similarity map for context (used in PerSAM logic)
-            img_features = predictor.get_image_embedding()
-            pooled_target_weight = target_weight.mean(dim=(-1, -2), keepdim=True)
-            
+            # Dynamic quadrant sorting: 512x512 borders inside the canvas
+            quadrants = {0: [], 1: [], 2: [], 3: []}
             for line in lines:
                 parts = line.split()
                 if len(parts) < 3:
                     continue
                 
-                # NEW LABEL FORMAT: class_id, x_pixel, y_pixel
                 cls_id = int(parts[0])
-                px = int(float(parts[1]))
-                py = int(float(parts[2]))
+                gx = int(float(parts[1]))
+                gy = int(float(parts[2]))
+                
+                # Determine which 512 block the point belongs to
+                q_idx = (1 if gx >= 512 else 0) + (2 if gy >= 512 else 0)
+                quadrants[q_idx].append((cls_id, gx, gy))
 
-                nudge = 4  
-                input_points = np.array([
-                    [px, py],           
-                    [px - nudge, py],   
-                    [px + nudge, py],   
-                    [px, py - nudge],   
-                    [px, py + nudge]    
-                ])
-                input_labels = np.array([1, 1, 1, 1, 1])
-
-                masks, _, _ = predictor.predict(
-                    point_coords=input_points,
-                    point_labels=input_labels,
-                    box=None,
-                    multimask_output=False
-                )
-
-                mask = masks[0]
-                yolo_obb = mask_to_yolo_obb(mask, img_w, img_h)
-
-                # Fallback to fixed-size horizontal box if OBB generation fails
-                if yolo_obb is None:
-                    def_w, def_h = 30.0, 15.0 # Average car size in pixels at 15cm GSD
-                    x1_n = (px - def_w / 2.0) / img_w
-                    y1_n = (py - def_h / 2.0) / img_h
-                    x2_n = (px + def_w / 2.0) / img_w
-                    y2_n = (py + def_h / 2.0) / img_h
+            global_refined_labels = []
+            
+            for q_idx, points in quadrants.items():
+                if not points: continue
+                
+                # Compute translation offsets for the patch
+                x_off = 512 if q_idx in [1, 3] else 0
+                y_off = 512 if q_idx in [2, 3] else 0
+                
+                # Extract the 512x512 crop
+                patch = img[y_off:y_off+512, x_off:x_off+512]
+                predictor.set_image(patch)
+                
+                for cls_id, gx, gy in points:
+                    # Translate global center point to local patch coordinate
+                    lx = gx - x_off
+                    ly = gy - y_off
                     
-                    yolo_obb = [x1_n, y1_n, x2_n, y1_n, x2_n, y2_n, x1_n, y2_n]
+                    nudge = 4  
+                    input_points = np.array([
+                        [lx, ly],           
+                        [lx - nudge, ly],   
+                        [lx + nudge, ly],   
+                        [lx, ly - nudge],   
+                        [lx, ly + nudge]    
+                    ])
+                    input_labels = np.array([1, 1, 1, 1, 1])
 
-                refined_labels.append([cls_id] + yolo_obb)
+                    masks, _, _ = predictor.predict(
+                        point_coords=input_points,
+                        point_labels=input_labels,
+                        box=None,
+                        multimask_output=False
+                    )
 
-            final_clean_labels = geometric_correction_head(refined_labels, img_w, img_h)
+                    # Extract local coordinates
+                    local_pts = mask_to_local_obb_points(masks[0])
+
+                    if local_pts is not None:
+                        # 1. Create native Shapely vector object in 512 space
+                        local_poly = Polygon(local_pts)
+                        
+                        # 2. Translate vector coordinates into the master canvas footprint
+                        global_poly = translate(local_poly, xoff=x_off, yoff=y_off)
+                        
+                        # 3. Pull out corners and normalize to YOLO format
+                        g_pts = list(global_poly.exterior.coords)[:4]
+                        yolo_obb = []
+                        for pt in g_pts:
+                            yolo_obb.extend([pt[0] / img_w, pt[1] / img_h])
+                    else:
+                        # Fallback to fixed-size horizontal box if OBB generation fails
+                        def_w, def_h = 30.0, 15.0
+                        x1_n = (gx - def_w / 2.0) / img_w
+                        y1_n = (gy - def_h / 2.0) / img_h
+                        x2_n = (gx + def_w / 2.0) / img_w
+                        y2_n = (gy + def_h / 2.0) / img_h
+                        
+                        yolo_obb = [x1_n, y1_n, x2_n, y1_n, x2_n, y2_n, x1_n, y2_n]
+
+                    global_refined_labels.append([cls_id] + yolo_obb)
+
+            final_clean_labels = geometric_correction_head(global_refined_labels, img_w, img_h)
 
             out_lbl_path = out_lbl_dir / (Path(img_name).stem + ".txt")
             with open(out_lbl_path, "w") as f:
@@ -284,7 +312,7 @@ def refine_dataset_persam(input_dir, output_dir, predictor, ref_img_path, ref_ma
                     f.write(f"{int(r[0])} {coords_str}\n")
                     
             if (idx + 1) % 100 == 0 or (idx + 1) == total_files:
-                print(f"    Progress: [{idx + 1}/{total_files}] files refined...", end="\r")
+                print(f"    Progress: [{idx + 1}/{total_files}] tiled files refined...", end="\r")
         print()
 
     print(f"✔ Relabeling complete!")
@@ -313,7 +341,7 @@ names:
 if __name__ == "__main__":
     
     # Updated to point to the new clean dataset format
-    INPUT_DATASET = "datasets/cowc_1024_persam_points"
+    INPUT_DATASET = "datasets/cowc_persam_points"
     OUTPUT_DATASET = "datasets/cowc_1024_persam_refined"
     
     # Load SAM
@@ -329,7 +357,7 @@ if __name__ == "__main__":
         _, generated_mask = cv2.threshold(temp_img, 15, 255, cv2.THRESH_BINARY)
         cv2.imwrite(str(ref_mask_file), generated_mask)
 
-    refine_dataset_persam(
+    refine_dataset_persam_tiled(
         input_dir=INPUT_DATASET,
         output_dir=OUTPUT_DATASET,
         predictor=sam_predictor,
