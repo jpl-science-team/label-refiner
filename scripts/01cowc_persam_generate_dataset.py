@@ -2,7 +2,6 @@
 
 import os
 import cv2
-import shutil
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -14,8 +13,8 @@ from segment_anything import sam_model_registry, SamPredictor
 # ---------------------------------------------------------
 def get_persam_weights(predictor, ref_image, ref_mask):
     """
-    Extracts persam visual features from the reference template 
-    so SAM recognizes the custom styling and texture of the vehicles.
+    Extracts DINOv2 visual features from the reference template 
+    so SAM recognizes the custom styling and texture of the cars.
     """
     with torch.no_grad():
         predictor.set_image(ref_image)
@@ -31,7 +30,7 @@ def get_persam_weights(predictor, ref_image, ref_mask):
     return target_weight
 
 # ---------------------------------------------------------
-# 2. Mask → Normalized YOLO OBB Converter
+# 2. Mask → Normalized YOLO OBB Converter (With Geometric Filtering)
 # ---------------------------------------------------------
 def mask_to_yolo_obb(mask, img_w, img_h):
     """
@@ -45,20 +44,28 @@ def mask_to_yolo_obb(mask, img_w, img_h):
     cnt = max(contours, key=cv2.contourArea)
     rect = cv2.minAreaRect(cnt)
     
+    # Extract structural dimensions to run verification checks
     (cx, cy), (w, h), angle = rect
     max_dimension = max(w, h)
     min_dimension = min(w, h)
     
-    if max_dimension > 90 or max_dimension < 6: 
+    # ---------------------------------------------------------
+    # DEFENSIVE FILTERING: Stop massive hallucinations & noise
+    # ---------------------------------------------------------
+    if max_dimension > 90: 
+        return None
+        
+    if max_dimension < 6:
         return None
         
     aspect_ratio = max_dimension / (min_dimension + 1e-6)
     if aspect_ratio > 4.5 or aspect_ratio < 1.1:
         return None
+    # ---------------------------------------------------------
 
     box_points = cv2.boxPoints(rect)
-    pts = np.array(box_points, dtype="float32")
     
+    pts = np.array(box_points, dtype="float32")
     x_sorted = pts[np.argsort(pts[:, 0]), :]
     left_pts = x_sorted[:2, :]
     right_pts = x_sorted[2:, :]
@@ -169,15 +176,11 @@ def load_sam(model_path="models/sam_vit_b.pth"):
     return predictor, device
 
 # ---------------------------------------------------------
-# 5. Main Datasets Processing Loop
+# 5. Main Datasets Processing Loop (with Splits & YAML generation)
 # ---------------------------------------------------------
-def refine_dataset_persam(input_dir, output_dir, predictor, ref_img_path, ref_mask_path):
-    input_root = Path(input_dir)
-    output_root = Path(output_dir)
-    
-    if output_root.exists():
-        print("🧹 Clearing previous refinement output tree...")
-        shutil.rmtree(output_root)
+def refine_dataset_persam(input_root, output_root, predictor, ref_img_path, ref_mask_path):
+    input_root = Path(input_root)
+    output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
     ref_img = cv2.imread(str(ref_img_path))
@@ -185,143 +188,135 @@ def refine_dataset_persam(input_dir, output_dir, predictor, ref_img_path, ref_ma
     if ref_img is None or ref_mask_raw is None:
         raise FileNotFoundError(f"Visual template artifacts missing or unreadable at paths:\n {ref_img_path}\n {ref_mask_path}")
 
-    print("🧠 Extracting Personalized DINOv2 target signature map...")
+    print("Extracting Personalized DINOv2 target signature map...")
     target_weight = get_persam_weights(predictor, ref_img, ref_mask_raw)
 
+    datasets = ["cowc"]
     splits = ["train", "val", "test"]
 
-    print(f"\n=== Running PerSAM Refinement Pipeline ===")
+    for dataset in datasets:
+        print(f"\n=== Running PerSAM Refinement: {dataset} ===")
+        
+        dataset_out_dir = output_root / dataset
+        dataset_out_dir.mkdir(parents=True, exist_ok=True)
 
-    for split in splits:
-        in_img_dir = input_root / "images" / split
-        in_lbl_dir = input_root / "labels" / split
-        out_img_dir = output_root / "images" / split
-        out_lbl_dir = output_root / "labels" / split
+        for split in splits:
+            in_img_dir = input_root / dataset / "images" / split
+            in_lbl_dir = input_root / dataset / "labels" / split
+            out_img_dir = dataset_out_dir / "images" / split
+            out_lbl_dir = dataset_out_dir / "labels" / split
 
-        if not in_img_dir.exists():
-            continue
-            
-        print(f"--> Processing split: [{split.upper()}]")
-
-        out_img_dir.mkdir(parents=True, exist_ok=True)
-        out_lbl_dir.mkdir(parents=True, exist_ok=True)
-
-        image_list = sorted([f for f in os.listdir(in_img_dir) if f.lower().endswith((".png", ".jpg", ".jpeg"))])
-        total_files = len(image_list)
-
-        for idx, img_name in enumerate(image_list):
-            img_path = in_img_dir / img_name
-            lbl_path = in_lbl_dir / (Path(img_name).stem + ".txt")
-
-            if not lbl_path.exists():
+            # Skip split if it doesn't exist in the input directory
+            if not in_img_dir.exists():
                 continue
-
-            shutil.copy(img_path, out_img_dir / img_name)
-
-            img = cv2.imread(str(img_path))
-            if img is None:
-                continue
-            img_h, img_w = img.shape[:2]
-
-            with open(lbl_path) as f:
-                lines = f.read().strip().splitlines()
-
-            refined_labels = []
-            predictor.set_image(img)
-
-            # Extract similarity map for context (used in PerSAM logic)
-            img_features = predictor.get_image_embedding()
-            pooled_target_weight = target_weight.mean(dim=(-1, -2), keepdim=True)
-            
-            for line in lines:
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
                 
-                # NEW LABEL FORMAT: class_id, x_pixel, y_pixel
-                cls_id = int(parts[0])
-                px = int(float(parts[1]))
-                py = int(float(parts[2]))
+            print(f"--> Processing split: {split}")
 
-                nudge = 4  
-                input_points = np.array([
-                    [px, py],           
-                    [px - nudge, py],   
-                    [px + nudge, py],   
-                    [px, py - nudge],   
-                    [px, py + nudge]    
-                ])
-                input_labels = np.array([1, 1, 1, 1, 1])
+            out_img_dir.mkdir(parents=True, exist_ok=True)
+            out_lbl_dir.mkdir(parents=True, exist_ok=True)
 
-                masks, _, _ = predictor.predict(
-                    point_coords=input_points,
-                    point_labels=input_labels,
-                    box=None,
-                    multimask_output=False
-                )
+            image_list = sorted([f for f in os.listdir(in_img_dir) if f.lower().endswith((".png", ".jpg", ".jpeg"))])
 
-                mask = masks[0]
-                yolo_obb = mask_to_yolo_obb(mask, img_w, img_h)
+            for img_name in image_list:
+                img_path = in_img_dir / img_name
+                lbl_path = in_lbl_dir / (Path(img_name).stem + ".txt")
 
-                # Fallback to fixed-size horizontal box if OBB generation fails
-                if yolo_obb is None:
-                    def_w, def_h = 30.0, 15.0 # Average car size in pixels at 15cm GSD
-                    x1_n = (px - def_w / 2.0) / img_w
-                    y1_n = (py - def_h / 2.0) / img_h
-                    x2_n = (px + def_w / 2.0) / img_w
-                    y2_n = (py + def_h / 2.0) / img_h
-                    
-                    yolo_obb = [x1_n, y1_n, x2_n, y1_n, x2_n, y2_n, x1_n, y2_n]
+                if not lbl_path.exists():
+                    continue
 
-                refined_labels.append([cls_id] + yolo_obb)
+                img = cv2.imread(str(img_path))
+                if img is None:
+                    continue
+                img_h, img_w = img.shape[:2]
 
-            final_clean_labels = geometric_correction_head(refined_labels, img_w, img_h)
+                cv2.imwrite(str(out_img_dir / img_name), img)
 
-            out_lbl_path = out_lbl_dir / (Path(img_name).stem + ".txt")
-            with open(out_lbl_path, "w") as f:
-                for r in final_clean_labels:
-                    coords_str = " ".join(f"{c:.6f}" for c in r[1:])
-                    f.write(f"{int(r[0])} {coords_str}\n")
-                    
-            if (idx + 1) % 100 == 0 or (idx + 1) == total_files:
-                print(f"    Progress: [{idx + 1}/{total_files}] files refined...", end="\r")
-        print()
+                with open(lbl_path) as f:
+                    lines = f.read().strip().splitlines()
 
-    print(f"✔ Relabeling complete!")
-    
-    yaml_content = f"""path: {output_root.absolute()}
+                refined_labels = []
+                predictor.set_image(img)
+
+                img_features = predictor.get_image_embedding()
+                pooled_target_weight = target_weight.mean(dim=(-1, -2), keepdim=True)
+                
+                similarity_map = torch.mean(img_features * pooled_target_weight, dim=1, keepdim=True)
+                similarity_map = F.interpolate(similarity_map, size=(img_h, img_w), mode="bilinear").squeeze().cpu().numpy()
+
+                for line in lines:
+                    parts = list(map(float, line.split()))
+                    if len(parts) < 5:
+                        continue
+                    cls_id, cx, cy, w, h = parts[:5]
+
+                    px = int(round(cx * img_w))
+                    py = int(round(cy * img_h))
+
+                    nudge = 4  
+                    input_points = np.array([
+                        [px, py],           
+                        [px - nudge, py],   
+                        [px + nudge, py],   
+                        [px, py - nudge],   
+                        [px, py + nudge]    
+                    ])
+                    input_labels = np.array([1, 1, 1, 1, 1])
+
+                    masks, scores, _ = predictor.predict(
+                        point_coords=input_points,
+                        point_labels=input_labels,
+                        box=None,
+                        multimask_output=False
+                    )
+
+                    mask = masks[0]
+                    yolo_obb = mask_to_yolo_obb(mask, img_w, img_h)
+
+                    if yolo_obb is None:
+                        x1_n = cx - (w / 2.0)
+                        y1_n = cy - (h / 2.0)
+                        x2_n = cx + (w / 2.0)
+                        y2_n = cy + (h / 2.0)
+                        
+                        yolo_obb = [x1_n, y1_n, x2_n, y1_n, x2_n, y2_n, x1_n, y2_n]
+
+                    refined_labels.append([int(cls_id)] + yolo_obb)
+
+                final_clean_labels = geometric_correction_head(refined_labels, img_w, img_h)
+
+                out_lbl_path = out_lbl_dir / (Path(img_name).stem + ".txt")
+                with open(out_lbl_path, "w") as f:
+                    for r in final_clean_labels:
+                        coords_str = " ".join(f"{c:.6f}" for c in r[1:])
+                        f.write(f"{int(r[0])} {coords_str}\n")
+
+        print(f"✔ Dataset processing complete: {dataset}")
+        
+        # ---------------------------------------------------------
+        # Generate YAML configuration file for YOLO training
+        # ---------------------------------------------------------
+        yaml_content = f"""path: {dataset_out_dir.absolute()}
 train: images/train
 val: images/val
 test: images/test
 
-# Number of classes
-nc: 1
-
 # Classes
 names:
-  0: vehicle
+  0: car
 """
-    yaml_path = output_root / "dataset.yaml"
-    with open(yaml_path, "w") as yaml_file:
-        yaml_file.write(yaml_content)
-    print(f"📝 Generated YOLO configuration file at: {yaml_path}")
-    print(f"🚀 Success! Production-ready OBB dataset is at: {output_root}")
+        yaml_path = dataset_out_dir / "data.yaml"
+        with open(yaml_path, "w") as yaml_file:
+            yaml_file.write(yaml_content)
+        print(f"✔ Generated YOLO config file at: {yaml_path}")
 
 # ---------------------------------------------------------
 # Entry Point
 # ---------------------------------------------------------
 if __name__ == "__main__":
-    
-    # Updated to point to the new clean dataset format
-    INPUT_DATASET = "datasets/cowc_1024_persam_points"
-    OUTPUT_DATASET = "datasets/cowc_1024_persam_refined"
-    
-    # Load SAM
     sam_predictor, dev_env = load_sam("models/sam_vit_b.pth")
 
-    # Assuming you still have your ref_car and ref_mask saved here
-    ref_image_file = Path("datasets/cowc_persam_points/ref_car.png")
-    ref_mask_file = Path("datasets/cowc_persam_points/ref_mask.png")
+    ref_image_file = Path("datasets/cowc/ref_car.png")
+    ref_mask_file = Path("datasets/cowc/ref_mask.png")
     
     if ref_image_file.exists() and not ref_mask_file.exists():
         print("[INFO] ref_mask.png not found. Auto-generating binary mask from template brightness thresholds...")
@@ -330,8 +325,8 @@ if __name__ == "__main__":
         cv2.imwrite(str(ref_mask_file), generated_mask)
 
     refine_dataset_persam(
-        input_dir=INPUT_DATASET,
-        output_dir=OUTPUT_DATASET,
+        input_root="datasets",
+        output_root="datasets_refined",
         predictor=sam_predictor,
         ref_img_path=ref_image_file,
         ref_mask_path=ref_mask_file

@@ -1,3 +1,6 @@
+'''
+Takes the raw COWC dataset and splits the dataset to create Train, Val, and Test splits. Extracts the annoations and saves then in YOLO format. 
+'''
 import os
 import glob
 import cv2

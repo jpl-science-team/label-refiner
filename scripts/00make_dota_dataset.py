@@ -68,7 +68,7 @@ def clone_and_convert_dataset(src_root, dest_root, img_size=512):
 
 if __name__ == "__main__":
     clone_and_convert_dataset(
-        src_root="datasets/cowc_512",
-        dest_root="datasets/cowc_512_detr",
+        src_root="datasets/cowc_512_sensor_degraded",
+        dest_root="datasets/cowc_512_degraded_dota",
         img_size=512
     )
