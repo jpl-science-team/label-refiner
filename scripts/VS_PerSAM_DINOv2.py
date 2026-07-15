@@ -11,7 +11,6 @@ from segment_anything import sam_model_registry, SamPredictor
 
 import shapely
 from shapely.geometry import Polygon
-from shapely.affinity import translate
 
 # ---------------------------------------------------------
 # 1. DINOv2 Global Feature Extractor Head
@@ -52,7 +51,7 @@ class DINOv2FeatureExtractor:
         return features
 
 # ---------------------------------------------------------
-# 2. Mask → Normalized YOLO OBB Converter
+# 2. Mask → Normalized YOLO OBB Converter (Tightly Constrained)
 # ---------------------------------------------------------
 def mask_to_yolo_obb(mask, img_w, img_h):
     contours, _ = cv2.findContours(mask.astype("uint8"), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -66,12 +65,12 @@ def mask_to_yolo_obb(mask, img_w, img_h):
     max_dimension = max(w, h)
     min_dimension = min(w, h)
     
-    # Relaxed constraints to accommodate small VEDAI vehicles
-    if max_dimension > 150 or max_dimension < 4: 
+    # FIX: Hard bounds constraints for 1024 overhead vehicles (drop shadows/driveways)
+    if max_dimension > 85 or max_dimension < 12: 
         return None
         
     aspect_ratio = max_dimension / (min_dimension + 1e-6)
-    if aspect_ratio > 5.0 or aspect_ratio < 1.0:
+    if aspect_ratio > 3.5 or aspect_ratio < 1.0:
         return None
 
     box_points = cv2.boxPoints(rect)
@@ -94,7 +93,7 @@ def mask_to_yolo_obb(mask, img_w, img_h):
     ]
 
 # ---------------------------------------------------------
-# 3. Post-Processing Geometric Correction Head
+# 3. Geometric Correction Head (Tightly Constrained)
 # ---------------------------------------------------------
 def geometric_correction_head(refined_labels, img_w, img_h):
     if len(refined_labels) == 0:
@@ -112,7 +111,7 @@ def geometric_correction_head(refined_labels, img_w, img_h):
         min_dim = min(w, h)
         aspect = max_dim / (min_dim + 1e-6)
 
-        if 8 < max_dim < 100 and 1.0 <= aspect < 5.0:
+        if 20 < max_dim < 80 and 1.2 <= aspect < 3.2:
             valid_cars.append({
                 'center': (cx, cy),
                 'size': (w, h),
@@ -128,7 +127,7 @@ def geometric_correction_head(refined_labels, img_w, img_h):
         min_dim = min(w, h)
         aspect = max_dim / (min_dim + 1e-6)
         
-        is_bad_box = max_dim > 150 or max_dim < 4 or aspect > 5.0
+        is_bad_box = max_dim > 85 or max_dim < 12 or aspect > 3.5
 
         if is_bad_box:
             correction_count += 1
@@ -138,7 +137,8 @@ def geometric_correction_head(refined_labels, img_w, img_h):
                 matched_w, matched_h = closest_car['size']
                 matched_angle = closest_car['angle']
             else:
-                matched_w, matched_h = 30.0, 15.0
+                # 1024 typical compact car dimensions
+                matched_w, matched_h = 48.0, 22.0
                 matched_angle = 0.0
             
             corrected_rect = ((cx, cy), (matched_w, matched_h), matched_angle)
@@ -247,7 +247,7 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
         available_splits = [s for s in ["train", "val", "test"] if (input_root / s).exists()]
         has_subsplits = True
 
-    print(f"\n=== Running DINOv2 + SAM Refinement Pipeline ===")
+    print(f"\n=== Running DINOv2 + SAM Refinement Pipeline (1024 Resolution) ===")
 
     for split in available_splits:
         split_in_dir = input_root / split if split != "." else input_root
@@ -286,7 +286,6 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
             
             img_h, img_w = img.shape[:2]
 
-            # 1. DINOv2 Whole Image Similarity Mapping
             img_embedding = dino.extract_embedding(img)
             ref_norm = F.normalize(ref_embedding, p=2, dim=1)
             img_norm = F.normalize(img_embedding, p=2, dim=1)
@@ -299,7 +298,6 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                 align_corners=False
             ).squeeze()
 
-            # 2. SAM Preparation
             predictor.set_image(img)
             refined_labels = []
 
@@ -317,11 +315,8 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                 
                 metrics_tracker["total_targets_processed"] += 1
                 
-                # ==========================================================
-                # TIGHT LEASH DINOv2 SHIFT LOGIC
-                # Restrict search to a 4-pixel radius so DINO cannot step off the car
-                # ==========================================================
-                search_radius = 4
+                # Position refinement window
+                search_radius = 6
                 x_min, x_max = max(0, gx - search_radius), min(img_w, gx + search_radius + 1)
                 y_min, y_max = max(0, gy - search_radius), min(img_h, gy + search_radius + 1)
                 
@@ -342,21 +337,58 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                 if similarity_score < 0.03:
                     best_gx, best_gy = gx, gy
 
-                # =======================================================
-                # CRITICAL FIX: Prompt SAM with a tight Bounding Box
-                # This traps SAM and prevents it from bleeding into the road
-                # =======================================================
-                box_radius = 12 # 24x24 pixel box (slightly larger than a VEDAI car)
+                # Dynamic boundary profile checking
+                prof_radius = 24 
+                px_min, px_max = max(0, best_gx - prof_radius), min(img_w, best_gx + prof_radius)
+                py_min, py_max = max(0, best_gy - prof_radius), min(img_h, best_gy + prof_radius)
+                
+                local_profile = sim_map_resized[py_min:py_max, px_min:px_max].cpu().numpy()
+                
+                threshold = 0.65 * (similarity_score + 1e-6)
+                binary_profile = local_profile > threshold
+                
+                y_indices, x_indices = np.where(binary_profile)
+                if len(x_indices) > 0 and len(y_indices) > 0:
+                    dynamic_radius_x = max(12, int((x_indices.max() - x_indices.min()) / 2) + 1)
+                    dynamic_radius_y = max(12, int((y_indices.max() - y_indices.min()) / 2) + 1)
+                    
+                    # FIX: Aggressive leash bounds to truncate shadow bleeding out completely
+                    dynamic_radius_x = min(dynamic_radius_x, 18)
+                    dynamic_radius_y = min(dynamic_radius_y, 18)
+                else:
+                    dynamic_radius_x, dynamic_radius_y = 15, 15
+
                 input_box = np.array([
-                    best_gx - box_radius, 
-                    best_gy - box_radius, 
-                    best_gx + box_radius, 
-                    best_gy + box_radius
+                    best_gx - dynamic_radius_x, 
+                    best_gy - dynamic_radius_y, 
+                    best_gx + dynamic_radius_x, 
+                    best_gy + dynamic_radius_y
                 ])
 
+                # =======================================================
+                # 🎯 FIX: CLOSE-PROXIMITY 8-POINT BACKGROUND RING
+                # Clamps negative inputs to block background texture leaks
+                # =======================================================
+                rx = dynamic_radius_x + 1
+                ry = dynamic_radius_y + 1
+                
+                input_coords = [
+                    [best_gx, best_gy],           # 1 Positive Target Point (Center)
+                    [best_gx - rx, best_gy],      # West
+                    [best_gx + rx, best_gy],      # East
+                    [best_gx, best_gy - ry],      # North
+                    [best_gx, best_gy + ry],      # South
+                    [best_gx - rx, best_gy - ry], # North-West
+                    [best_gx + rx, best_gy - ry], # North-East
+                    [best_gx - rx, best_gy + ry], # South-West
+                    [best_gx + rx, best_gy + ry]  # South-East
+                ]
+                input_points = np.array(input_coords)
+                input_labels = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0]) # 1 = Object, 0 = Blocked asphalt/shadow
+
                 masks, _, _ = predictor.predict(
-                    point_coords=None,
-                    point_labels=None,
+                    point_coords=input_points,
+                    point_labels=input_labels,
                     box=input_box[None, :], 
                     multimask_output=False
                 )
@@ -366,7 +398,7 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                 if yolo_obb is None:
                     metrics_tracker["sam_mask_failures"] += 1
                     metrics_tracker["total_reversions"] += 1
-                    def_w, def_h = 30.0, 15.0 # Fallback pixels
+                    def_w, def_h = 48.0, 22.0 
                     x1_n = (gx - def_w / 2.0) / img_w
                     y1_n = (gy - def_h / 2.0) / img_h
                     x2_n = (gx + def_w / 2.0) / img_w
@@ -375,7 +407,6 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
 
                 refined_labels.append([cls_id] + yolo_obb)
 
-            # Post-Processing Head & Duplicates Tracker
             final_clean_labels, corrections = geometric_correction_head(refined_labels, img_w, img_h)
             metrics_tracker["geometric_corrections"] += corrections
             metrics_tracker["total_reversions"] += corrections
@@ -393,9 +424,7 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                 print(f"    Progress: [{idx + 1}/{total_files}] processed target assets...", end="\r")
         print()
 
-    # ---------------------------------------------------------
-    # EXPORT PIPELINE DIAGNOSTIC REPORT
-    # ---------------------------------------------------------
+    # Diagnostics report export block
     total_inst = metrics_tracker["total_targets_processed"]
     reversions = metrics_tracker["total_reversions"]
     duplicates = metrics_tracker["duplicate_boxes"]
@@ -424,7 +453,6 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
 
     print(f"\n📊 Diagnostics report generated successfully at: {report_path}")
 
-    # Generate YAML
     yaml_content = f"path: {output_root.absolute()}\n"
     if has_subsplits:
         if "train" in available_splits: yaml_content += "train: train/images\n"
@@ -440,13 +468,14 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
     print(f"🚀 Success! YOLO OBB dataset generated cleanly at: {output_root}")
 
 if __name__ == "__main__":
-    INPUT_DATASET = "datasets/vedai/vedai_color_centerpoint"
-    OUTPUT_DATASET = "datasets/vedai/vedai_color_OBB_Refined"
+    # Standardized root directories to prevent folder layout clutter
+    INPUT_DATASET = "datasets/vedai_1024/vedai_color_centerpoint"
+    OUTPUT_DATASET = "datasets/vedai_1024/vedai_color_OBB_Refined"
     
     sam_predictor = load_sam("models/sam_vit_b.pth")
 
-    ref_image_file = Path("datasets/vedai/vedai_color_centerpoint/ref_car.png")
-    ref_mask_file = Path("datasets/vedai/vedai_color_centerpoint/ref_mask.png")
+    ref_image_file = Path("datasets/vedai_1024/vedai_color_centerpoint/ref_car.png")
+    ref_mask_file = Path("datasets/vedai_1024/vedai_color_centerpoint/ref_mask.png")
     
     if ref_image_file.exists() and not ref_mask_file.exists():
         print("[INFO] ref_mask.png not found. Auto-generating binary mask via Otsu's thresholding...")

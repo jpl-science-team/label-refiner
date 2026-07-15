@@ -25,7 +25,7 @@ WINDOW_NAME = "COWC Inspector"
 DISPLAY_HEIGHT = 800  # Adjust this to fit your screen
 
 # TARGET SPLIT SELECTION: Change this to "train", "val", or "test"
-SPLIT = "train" 
+SPLIT = "test" 
 # ---------------------
 
 # Global state

@@ -58,9 +58,9 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
                 orig_class = int(parts[3])
                 
                 # =========================================================
-                # STRICT SEMANTIC FILTER:
-                # Keep only Cars (1), Pickups (2), and Vans (9).
-                # Drop Tractors, Campers, Boats, etc.
+                # STRICT SEMANTIC FILTER (COWC Aligned)
+                # KEEPS: 1=Car, 2=Pickup, 9=Van
+                # DROPS: 4=Truck, 5=Semi, 7=Tractor, 8=Camping Car, 11=Boat, 3=Plane
                 # =========================================================
                 if orig_class not in [1, 2, 9]:
                     total_vehicles_dropped += 1
@@ -71,14 +71,16 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
                 # Map to generic '0' if tracking as a single vehicle class
                 class_id = 0 if map_to_vehicle_class else orig_class
                 
-                # VEDAI absolute image bounds for normalization (512x512 pixels)
-                img_w, img_h = 512.0, 512.0
+                # =========================================================
+                # UPDATED SCALE DOMAIN FOR 1024x1024 VARIANT
+                # =========================================================
+                img_w, img_h = 1024.0, 1024.0
                 
                 # 1. Compute YOLO OBB Format (8 coordinate points)
                 x_coords = [float(parts[6]), float(parts[7]), float(parts[8]), float(parts[9])]
                 y_coords = [float(parts[10]), float(parts[11]), float(parts[12]), float(parts[13])]
                 
-                # Normalize between 0.0 and 1.0 and clip to be safe
+                # Normalize between 0.0 and 1.0 and clip to safety
                 x_norm = [max(0.0, min(1.0, x / img_w)) for x in x_coords]
                 y_norm = [max(0.0, min(1.0, y / img_h)) for y in y_coords]
                 
@@ -90,16 +92,14 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
                     f"{x_norm[3]:.6f} {y_norm[3]:.6f}\n"
                 )
                 
-                # =========================================================
-                # CRITICAL FIX: Correct VEDAI Indexing
-                # parts[0] is X-center, parts[1] is Y-center
-                # =========================================================
+                # 2. Correct VEDAI Indexing for Centerpoints
                 x_center = max(0.0, min(1.0, float(parts[0]) / img_w))
                 y_center = max(0.0, min(1.0, float(parts[1]) / img_h))
                 
+                # Standard normalized box placeholder dimension for point verification
                 center_lines.append(f"{class_id} {x_center:.6f} {y_center:.6f} 0.005000 0.005000\n")
                 
-        # If no valid vehicles were found in this image after filtering, skip copying the image
+        # If no valid vehicles were found in this image after filtering, skip it
         if len(obb_lines) == 0:
             continue
             
@@ -127,18 +127,18 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
 
     print(f"\nProcessing complete! Successfully structured {success_count} aligned image pairs.")
     print(f"  - Vehicles retained (Cars/Pickups/Vans): {total_vehicles_kept}")
-    print(f"  - Outliers dropped (Tractors/Boats):     {total_vehicles_dropped}")
+    print(f"  - Outliers dropped (Trucks/Boats/Etc):   {total_vehicles_dropped}")
     print(f"Datasets generated under: {output_base_dir.resolve()}")
 
 if __name__ == "__main__":
-    # --- UPDATE THESE PATHS TO POINT TO YOUR EXTRACTED VEDAI FILE DIRECTORIES ---
-    RAW_VEDAI_IMAGES = "data/VEDAI/Vehicules512" 
-    RAW_VEDAI_ANNOTATIONS = "data/VEDAI/Annotations512"
+    # Pointing to the directories where you extracted your 1024 dataset files
+    RAW_VEDAI_IMAGES = "data/VEDAI/Vehicules1024" 
+    RAW_VEDAI_ANNOTATIONS = "data/VEDAI/Annotations1024"
     
     # Destination directory for the 4 separated test datasets
-    OUTPUT_STUDY_DIR = "datasets/vedai"
+    OUTPUT_STUDY_DIR = "datasets/vedai_1024"
     
-    # Set to True to turn all retained vehicles into Class 0 
+    # Map all targets down to a single global class '0' for clean auto-relabel testing
     MAP_TO_SINGLE_VEHICLE = True
     
     process_vedai_dataset(RAW_VEDAI_IMAGES, RAW_VEDAI_ANNOTATIONS, OUTPUT_STUDY_DIR, MAP_TO_SINGLE_VEHICLE)
