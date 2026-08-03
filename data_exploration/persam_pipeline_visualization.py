@@ -134,8 +134,8 @@ def generate_visuals(predictor, ref_img, ref_mask, test_img_path, labels_path, o
 if __name__ == "__main__":
     # --- 1. Print the Metrics ---
     # Update these paths to match your actual directory structure
-    TOTAL_PROCESSED_DIR = "datasets_refined/cowc/images"
-    NEEDS_REFINEMENT_DIR = "datasets_refined/cowc/needs_refinement/images"
+    TOTAL_PROCESSED_DIR = "datasets/cowc_512/images"
+    NEEDS_REFINEMENT_DIR = "datasets/512_needs_refinement/images"
     
     calculate_manual_reduction(TOTAL_PROCESSED_DIR, NEEDS_REFINEMENT_DIR)
 
@@ -148,17 +148,17 @@ if __name__ == "__main__":
     sam.to("cuda" if torch.cuda.is_available() else "cpu")
     predictor = SamPredictor(sam)
 
-    ref_image_path = "datasets/cowc/ref_car.png"
-    ref_mask_path = "datasets/cowc/ref_mask.png"
+    ref_image_path = "datasets/cowc_persam_points/ref_car.png"
+    ref_mask_path = "datasets/cowc_persam_points/ref_mask.png"
     
     ref_img = cv2.imread(ref_image_path)
     ref_mask = cv2.imread(ref_mask_path, cv2.IMREAD_GRAYSCALE)
     
     if ref_img is not None and ref_mask is not None:
         # Pick one highly representative image from your dataset to show off
-        test_img_file = "datasets/cowc_test_refined/cowc/images/10_12582.png"
-        test_lbl_file = "datasets/cowc_test_refined/cowc/labels/10_12582.txt"
-        out_vis_file  = "persam_pipeline_visualization.png"
+        test_img_file = "datasets/512_needs_refinement/images/val/Vaihingen_ISPRS_TOP_Mosaic_09cm_scaled_15cm_Gray_y11264_x8192.png"
+        test_lbl_file = "datasets/512_needs_refinement/labels/val/Vaihingen_ISPRS_TOP_Mosaic_09cm_scaled_15cm_Gray_y11264_x8192.txt"
+        out_vis_file  = "persam_pipeline_visualization3.png"
         
         generate_visuals(predictor, ref_img, ref_mask, test_img_file, test_lbl_file, out_vis_file)
     else:

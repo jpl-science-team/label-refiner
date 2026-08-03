@@ -178,3 +178,6 @@ cython_debug/
 # Clean Up
 .DS_Store
 **/.DS_Store
+data/
+datasets/
+test_data/

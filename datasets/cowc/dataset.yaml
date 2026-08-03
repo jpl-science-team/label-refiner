@@ -1,6 +1,0 @@
-names:
-- car
-nc: 1
-path: /Users/graddy/work/small-object-detection/datasets/cowc
-train: images/train
-val: images/val

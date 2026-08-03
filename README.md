@@ -4,141 +4,111 @@ This repository provides an automated pipeline for preparing, exploring, and ref
 
 The primary objective is to generate clean, consistent YOLO-style labels by leveraging the **Segment Anything Model (SAM)** and **Personalized SAM (PerSAM)** for bounding box refinement. The repository is structured to handle dataset transformation, inspection, automated quality filtering, and experimental split locking within a reproducible, isolated environment.
 
-
-**Author: Bridgit Graddy, JPL Summer Intern, 2026** <br>
-bgraddy@broncos.uncfsu.edu <br>
-Mentors: Emily Dunkel and Mike Burl
-
 ---
 
-## 🚀 Features
+🚀 Features
+Test Subset & Preprocessing Scripts (00*): Utility scripts like 00make_cowc_test.py, 00make_dota_dataset.py, and 00pure_geographic_splitter.py extract lightweight samples and preprocess raw formats for rapid pipeline debugging without altering core processing flows.
 
-* **Test Subset Generation:** `00create_test_subset.py` extracts a lightweight sample of each dataset (images + labels) for rapid pipeline debugging. All scripts starting with 00 are for testing/cleaning purposes and do not effect the current pipeline.
-* **PerSAM Precision Refinement:** `01_cowc_persam_generate_dataset.py` leverages DINOv2 feature matching, dynamic bounding box shrinking, and morphological erosion to tightly bound densely clustered vehicles at 15m/pixel resolutions.
-* **Automated Quality Filtering:** `00clean_refined_dir.py` cross-references a `needs_refinement` blacklist folder to instantly purge problematic imagery and labels from your generated sets.
-* **Deterministic Split Locking:** `02lock_cowc_yolo_dataset.py` pools generated data, shuffles it with a fixed random seed, and locks in a clean **80% Train / 15% Val / 5% Test** YOLOv8-compliant distribution ready for deployment.
-* **Dataset Exploration Tools:** Interactive inspection utilities located in `data_exploration/` provide bounding box visualizations and localized zooming.
+VEDAI Study Pipeline (VS_*): End-to-end workflow designed for VEDAI dataset processing, including dataset separation/conversion, PerSAM feature extraction, failure analysis, and evaluation.
 
----
+DINO and SAM Precision Refinement: Refinement scripts (such as 01cowc_persam_generate_dataset.py and VS_PerSAM_DINOv2.py) leverage DINOv2 feature matching, dynamic bounding box shrinking, and morphological erosion to tightly bound densely clustered vehicles at aerial resolutions.
 
-## Large Files on Google Drive
+Sensor Degradation: 02sensor_degradation.py applies realistic sensor artifacts and resolution loss to simulate non-ideal capture conditions.
 
-The Science Team shared drive is located: https://drive.google.com/drive/folders/0AOVva14csqXNUk9PVA
-
-Please contact Emily Dunkel for access to drive.
+Automated Quality Filtering: Cross-reference validation tools and failure detection scripts (VS_FindFailures.py) to inspect problematic imagery and labels from generated sets.
 
 
-## 🛠️ Environment Setup
+Dataset Exploration Tools: Interactive inspection utilities located in data_exploration/ provide bounding box visualizations, localized zooming, pipeline metrics, and DETR/YOLO format validation.
 
+🛠️ Environment Setup
 To avoid dependency conflicts and ensure all scripts execute correctly, build an isolated environment specifically for this repository.
 
-### 1. Clone the Repository
-
-```bash
+1. Clone the Repository
+Bash
 git clone https://github.jpl.nasa.gov/science-team-algorithms/label-refiner.git
 cd label-refiner
-```
+2. Create & Activate Environment
+Using Conda (Recommended):
 
-### 2. Create & Activate Environment
-
-```bash
-# using conda (recommended):
+Bash
 conda create -n label-refiner python=3.10 -y
 conda activate label-refiner
+Using venv:
 
-# alternatively, using venv:
+Bash
 python3 -m venv .env
 source .env/bin/activate  # macOS/Linux
 .env\Scripts\activate     # Windows
-```
-
-### 3. Install Dependencies
-
-```bash
+3. Install Dependencies
+Bash
 pip install -r requirements.txt
-```
-
 ⚠️ Note: If utilizing a specific hardware acceleration backend (e.g., NVIDIA CUDA or Apple Silicon MPS), verify your PyTorch and Torchvision lines in requirements.txt align with your hardware before running the installation.
 
 📦 Handling Large Files (Git LFS)
-This repository utilizes Git Large File Storage (LFS) to manage large model weights, such as the SAM .pth checkpoints. If you clone the repository and notice that the model files are only a few bytes in size (containing text pointers instead of actual weights), pull the binary assets manually.
+This repository utilizes Git Large File Storage (LFS) to manage large model weights, such as the SAM .pth checkpoints. If you clone the repository and notice that the model files are only a few bytes in size (containing text pointers instead of actual weights), pull the binary assets manually:
 
-A. Install Git LFS (If needed)
-
-```bash
+Bash
 git lfs install
-```
-
-B. Pull Tracked Binary Assets
-
-```bash
 git lfs pull
-```
 
-### 🏁 Quickstart Workflow
-Follow these steps to process a raw dataset from start to finish.
+🏁 Quickstart Workflows
+Option A: VEDAI Study Pipeline
+For the VEDAI dataset execution sequence, run the VS_* suite in the following order:
 
-####  1. Place Source Datasets
+Bash
+# 1. Separate and convert raw dataset into working format
+python scripts/VS_VEDAI_Separation_Conversion.py
+
+# 2. Run SAM refinement with DINOv2 feature matching
+python scripts/VS_PerSAM_DINOv2.py
+
+# 3. Analyze failure modes across processed imagery
+python scripts/VS_FindFailures.py
+
+# 4. Evaluate overall pipeline precision/recall metrics
+python scripts/VS_evaluate_pipeline.py
+
+Option B: COWC Processing & Degradation Pipeline
+Follow these steps to process, refine, degrade, and lock down the standard COWC dataset:
+
+1. Place Source Datasets
 Ensure your raw imagery datasets are positioned inside the datasets/ root directory:
 
-```text
+Plaintext
 datasets/
     ├── cowc/
     ├── cowc_rgb_1m/
     └── cowc_rgb_05m/
-```
-
-#### 2. Add Your SAM Checkpoint
+2. Add Your SAM Checkpoint
 Place your downloaded Segment Anything model weights inside the models/ directory:
 
-```text
+Plaintext
 models/
     └── sam_vit_b.pth
-```
-
-#### 3. Generate the Refined Labels
+3. Generate Refined Labels
 Execute the PerSAM pipeline to refine your target dataset layout:
 
-```bash
+Bash
 python scripts/01cowc_persam_generate_dataset.py
-```
-
 Outputs will be generated to: datasets_refined/cowc/
 
-#### 4. Inspect the Data 
+4. Apply Sensor Degradation
+Simulate sensor noise and degradation on the refined target dataset:
 
-You can inspect the data by running:
+Bash
+python scripts/02sensor_degradation.py
+5. Purge Quality Blacklists
+Validate the generated data using the exploration tools:
 
-```bash
+Bash
 python data_exploration/val_yolo_dataset.py
-```
+If your inspection generated a needs_refinement/ folder containing images that failed validation.
 
-You will get an interactive tool that has you open up a file. To see your newly refined datasets, select folder: datasets_refined/cowc
-
-Then, you can flip through the different images.
-
-#### 5. Purge Datset
-If you have run the interactive dataset inspector tool and generated a needs_refinement/ folder containing images that failed validation, run the automated purge script to safely delete them from your newly generated data:
-
-```bash
-python scripts/00clean_refined_dir.py
-```
-
-#### 6. Lock and Freeze the Baseline Split (this is being updated by Bridgit, original splits had data leakage)
-Pool all remaining clean imagery together, shuffle them deterministically, and lock them into a frozen 80/15/5 distribution complete with a relative-pathed data.yaml:
-
-```bash
-python scripts/02lock_cowc_yolo_dataset.py
-```
-
-Outputs will be written to: processed_datasets/20260615_42_cowc_base/ #update as follows <date_seed_dataset>
-
-#### 7. Zip and Export
+6. Zip and Export
 Compress the finalized, locked baseline package so it can be moved to your training repository:
 
-```bash
+Bash
 zip -r 20260615_42_cowc_base.zip processed_datasets/20260615_42_cowc_base
-```
 
 👥 Contributors
 Bridgit Graddy — Lead contributor to dataset processing, label refinement architectures, and pipeline automation development.
