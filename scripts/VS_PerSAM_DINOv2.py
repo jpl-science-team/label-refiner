@@ -8,12 +8,10 @@ import torch
 import torch.nn.functional as F
 from pathlib import Path
 from segment_anything import sam_model_registry, SamPredictor
-
-import shapely
 from shapely.geometry import Polygon
 
 # ---------------------------------------------------------
-# 1. DINOv2 Global Feature Extractor Head
+# 1. DINOv2 Feature Extractor & Prompt Refinement
 # ---------------------------------------------------------
 class DINOv2FeatureExtractor:
     def __init__(self, model_name="dinov2_vits14"):
@@ -51,9 +49,10 @@ class DINOv2FeatureExtractor:
         return features
 
 # ---------------------------------------------------------
-# 2. Mask → Normalized YOLO OBB Converter (Tightly Constrained)
+# 2. Mask → Normalized YOLO OBB Converter (With Filtering Criteria)
 # ---------------------------------------------------------
 def mask_to_yolo_obb(mask, img_w, img_h):
+    """Converts SAM binary mask to an 8-point OBB. Drops invalid/out-of-bounds masks."""
     contours, _ = cv2.findContours(mask.astype("uint8"), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
@@ -65,10 +64,11 @@ def mask_to_yolo_obb(mask, img_w, img_h):
     max_dimension = max(w, h)
     min_dimension = min(w, h)
     
-    # FIX: Hard bounds constraints for 1024 overhead vehicles (drop shadows/driveways)
-    if max_dimension > 85 or max_dimension < 12: 
+    # HARD CRITERIA FILTER 1: Size limits for vehicles
+    if max_dimension > 95 or max_dimension < 12: 
         return None
         
+    # HARD CRITERIA FILTER 2: Aspect ratio limits
     aspect_ratio = max_dimension / (min_dimension + 1e-6)
     if aspect_ratio > 3.5 or aspect_ratio < 1.0:
         return None
@@ -76,6 +76,7 @@ def mask_to_yolo_obb(mask, img_w, img_h):
     box_points = cv2.boxPoints(rect)
     pts = np.array(box_points, dtype="float32")
     
+    # Order points: TL, TR, BR, BL
     x_sorted = pts[np.argsort(pts[:, 0]), :]
     left_pts = x_sorted[:2, :]
     right_pts = x_sorted[2:, :]
@@ -93,30 +94,15 @@ def mask_to_yolo_obb(mask, img_w, img_h):
     ]
 
 # ---------------------------------------------------------
-# 3. Geometric Correction Head (Tightly Constrained)
+# 3. OBB Refinement & Filtering Stage
 # ---------------------------------------------------------
-def geometric_correction_head(refined_labels, img_w, img_h):
+def filter_obb_labels(refined_labels, img_w, img_h):
+    """Refinement stage: Filters candidate OBB labels and drops bad geometries."""
     if len(refined_labels) == 0:
-        return refined_labels, 0
+        return [], 0
 
-    corrected_labels = []
-    valid_cars = []
-    correction_count = 0
-
-    for label in refined_labels:
-        pts = np.array(label[1:]).reshape(4, 2)
-        rect = cv2.minAreaRect((pts * np.array([img_w, img_h])).astype(np.float32))
-        (cx, cy), (w, h), angle = rect
-        max_dim = max(w, h)
-        min_dim = min(w, h)
-        aspect = max_dim / (min_dim + 1e-6)
-
-        if 20 < max_dim < 80 and 1.2 <= aspect < 3.2:
-            valid_cars.append({
-                'center': (cx, cy),
-                'size': (w, h),
-                'angle': angle
-            })
+    valid_labels = []
+    dropped_count = 0
 
     for label in refined_labels:
         cls_id = label[0]
@@ -127,45 +113,20 @@ def geometric_correction_head(refined_labels, img_w, img_h):
         min_dim = min(w, h)
         aspect = max_dim / (min_dim + 1e-6)
         
-        is_bad_box = max_dim > 85 or max_dim < 12 or aspect > 3.5
+        # Criteria checks on converted OBB
+        is_bad_box = max_dim > 95 or max_dim < 12 or aspect > 3.5
 
         if is_bad_box:
-            correction_count += 1
-            if len(valid_cars) > 0:
-                distances = [np.linalg.norm(np.array((cx, cy)) - np.array(vc['center'])) for vc in valid_cars]
-                closest_car = valid_cars[np.argmin(distances)]
-                matched_w, matched_h = closest_car['size']
-                matched_angle = closest_car['angle']
-            else:
-                # 1024 typical compact car dimensions
-                matched_w, matched_h = 48.0, 22.0
-                matched_angle = 0.0
+            dropped_count += 1
+            # DROP: Do not save or adjust bad box
+            continue
             
-            corrected_rect = ((cx, cy), (matched_w, matched_h), matched_angle)
-            box_points = cv2.boxPoints(corrected_rect)
-            
-            x_sorted = box_points[np.argsort(box_points[:, 0]), :]
-            left_pts = x_sorted[:2, :]
-            right_pts = x_sorted[2:, :]
-            tl = left_pts[np.argsort(left_pts[:, 1])[0]]
-            bl = left_pts[np.argsort(left_pts[:, 1])[1]]
-            tr = right_pts[np.argsort(right_pts[:, 1])[0]]
-            br = right_pts[np.argsort(right_pts[:, 1])[1]]
-            
-            normalized_obb = [
-                tl[0] / img_w, tl[1] / img_h,
-                tr[0] / img_w, tr[1] / img_h,
-                br[0] / img_w, br[1] / img_h,
-                bl[0] / img_w, bl[1] / img_h
-            ]
-            corrected_labels.append([int(cls_id)] + normalized_obb)
-        else:
-            corrected_labels.append(label)
+        valid_labels.append(label)
 
-    return corrected_labels, correction_count
+    return valid_labels, dropped_count
 
 # ---------------------------------------------------------
-# 4. Duplicate Box Calculator (IoU Metric)
+# 4. Duplicate Box Calculator
 # ---------------------------------------------------------
 def count_duplicate_boxes(labels, img_w, img_h, iou_threshold=0.85):
     duplicates = 0
@@ -211,9 +172,9 @@ def load_sam(model_path="models/sam_vit_b.pth"):
     return predictor
 
 # ---------------------------------------------------------
-# 6. Main Pipeline
+# 6. Main Pipeline Strategy: DINO -> SAM -> Refine OBB Filter
 # ---------------------------------------------------------
-def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_mask_path):
+def run_dino_sam_obb_pipeline(input_dir, output_dir, predictor, ref_img_path, ref_mask_path):
     input_root = Path(input_dir)
     output_root = Path(output_dir)
     
@@ -225,17 +186,18 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
     ref_img = cv2.imread(str(ref_img_path))
     ref_mask_raw = cv2.imread(str(ref_mask_path), cv2.IMREAD_GRAYSCALE)
     if ref_img is None or ref_mask_raw is None:
-        raise FileNotFoundError(f"Missing one-shot reference template target elements.")
+        raise FileNotFoundError("Missing one-shot reference template target elements.")
 
+    # 1. Initialize DINO
     dino = DINOv2FeatureExtractor()
-    print("✨ Mapping targeted DINOv2 semantic one-shot template array...")
+    print("✨ Extracting DINO reference features...")
     ref_embedding = dino.extract_embedding(ref_img, ref_mask_raw)
 
     metrics_tracker = {
         "total_targets_processed": 0,
         "sam_mask_failures": 0,
-        "geometric_corrections": 0,
-        "total_reversions": 0,
+        "dropped_geometric": 0,
+        "total_dropped": 0,
         "duplicate_boxes": 0,
         "dino_similarities": []
     }
@@ -247,24 +209,16 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
         available_splits = [s for s in ["train", "val", "test"] if (input_root / s).exists()]
         has_subsplits = True
 
-    print(f"\n=== Running DINOv2 + SAM Refinement Pipeline (1024 Resolution) ===")
+    print(f"\n=== Executing DINO -> SAM -> OBB Refinement Pipeline ===")
 
     for split in available_splits:
         split_in_dir = input_root / split if split != "." else input_root
         
-        if (split_in_dir / "images").exists():
-            in_img_dir = split_in_dir / "images"
-            in_lbl_dir = split_in_dir / "labels" if (split_in_dir / "labels").exists() else split_in_dir
-        else:
-            in_img_dir = split_in_dir
-            in_lbl_dir = split_in_dir
+        in_img_dir = split_in_dir / "images" if (split_in_dir / "images").exists() else split_in_dir
+        in_lbl_dir = split_in_dir / "labels" if (split_in_dir / "labels").exists() else split_in_dir
 
-        if has_subsplits:
-            out_img_dir = output_root / split / "images"
-            out_lbl_dir = output_root / split / "labels"
-        else:
-            out_img_dir = output_root / "images"
-            out_lbl_dir = output_root / "labels"
+        out_img_dir = output_root / split / "images" if has_subsplits else output_root / "images"
+        out_lbl_dir = output_root / split / "labels" if has_subsplits else output_root / "labels"
             
         out_img_dir.mkdir(parents=True, exist_ok=True)
         out_lbl_dir.mkdir(parents=True, exist_ok=True)
@@ -286,6 +240,7 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
             
             img_h, img_w = img.shape[:2]
 
+            # DINO Feature Extraction & Similarity Mapping
             img_embedding = dino.extract_embedding(img)
             ref_norm = F.normalize(ref_embedding, p=2, dim=1)
             img_norm = F.normalize(img_embedding, p=2, dim=1)
@@ -298,8 +253,9 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                 align_corners=False
             ).squeeze()
 
+            # Set current image for SAM
             predictor.set_image(img)
-            refined_labels = []
+            candidate_labels = []
 
             with open(lbl_path) as f:
                 lines = f.read().strip().splitlines()
@@ -309,13 +265,12 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                 if len(parts) < 3: continue
                 
                 cls_id = int(parts[0])
-                
                 gx = int(float(parts[1]) * img_w)
                 gy = int(float(parts[2]) * img_h)
                 
                 metrics_tracker["total_targets_processed"] += 1
-                
-                # Position refinement window
+
+                # STEP 1: DINO Prompt Search
                 search_radius = 6
                 x_min, x_max = max(0, gx - search_radius), min(img_w, gx + search_radius + 1)
                 y_min, y_max = max(0, gy - search_radius), min(img_h, gy + search_radius + 1)
@@ -337,24 +292,18 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                 if similarity_score < 0.03:
                     best_gx, best_gy = gx, gy
 
-                # Dynamic boundary profile checking
                 prof_radius = 24 
                 px_min, px_max = max(0, best_gx - prof_radius), min(img_w, best_gx + prof_radius)
                 py_min, py_max = max(0, best_gy - prof_radius), min(img_h, best_gy + prof_radius)
                 
                 local_profile = sim_map_resized[py_min:py_max, px_min:px_max].cpu().numpy()
-                
                 threshold = 0.65 * (similarity_score + 1e-6)
                 binary_profile = local_profile > threshold
                 
                 y_indices, x_indices = np.where(binary_profile)
                 if len(x_indices) > 0 and len(y_indices) > 0:
-                    dynamic_radius_x = max(12, int((x_indices.max() - x_indices.min()) / 2) + 1)
-                    dynamic_radius_y = max(12, int((y_indices.max() - y_indices.min()) / 2) + 1)
-                    
-                    # FIX: Aggressive leash bounds to truncate shadow bleeding out completely
-                    dynamic_radius_x = min(dynamic_radius_x, 18)
-                    dynamic_radius_y = min(dynamic_radius_y, 18)
+                    dynamic_radius_x = min(max(12, int((x_indices.max() - x_indices.min()) / 2) + 1), 18)
+                    dynamic_radius_y = min(max(12, int((y_indices.max() - y_indices.min()) / 2) + 1), 18)
                 else:
                     dynamic_radius_x, dynamic_radius_y = 15, 15
 
@@ -365,27 +314,23 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                     best_gy + dynamic_radius_y
                 ])
 
-                # =======================================================
-                # 🎯 FIX: CLOSE-PROXIMITY 8-POINT BACKGROUND RING
-                # Clamps negative inputs to block background texture leaks
-                # =======================================================
                 rx = dynamic_radius_x + 1
                 ry = dynamic_radius_y + 1
-                
                 input_coords = [
-                    [best_gx, best_gy],           # 1 Positive Target Point (Center)
-                    [best_gx - rx, best_gy],      # West
-                    [best_gx + rx, best_gy],      # East
-                    [best_gx, best_gy - ry],      # North
-                    [best_gx, best_gy + ry],      # South
-                    [best_gx - rx, best_gy - ry], # North-West
-                    [best_gx + rx, best_gy - ry], # North-East
-                    [best_gx - rx, best_gy + ry], # South-West
-                    [best_gx + rx, best_gy + ry]  # South-East
+                    [best_gx, best_gy],
+                    [best_gx - rx, best_gy],
+                    [best_gx + rx, best_gy],
+                    [best_gx, best_gy - ry],
+                    [best_gx, best_gy + ry],
+                    [best_gx - rx, best_gy - ry],
+                    [best_gx + rx, best_gy - ry],
+                    [best_gx - rx, best_gy + ry],
+                    [best_gx + rx, best_gy + ry]
                 ]
                 input_points = np.array(input_coords)
-                input_labels = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0]) # 1 = Object, 0 = Blocked asphalt/shadow
+                input_labels = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0])
 
+                # STEP 2: Feed Prompts to SAM
                 masks, _, _ = predictor.predict(
                     point_coords=input_points,
                     point_labels=input_labels,
@@ -393,23 +338,20 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                     multimask_output=False
                 )
 
+                # STEP 3: Mask to OBB & Filter check
                 yolo_obb = mask_to_yolo_obb(masks[0], img_w, img_h)
 
                 if yolo_obb is None:
                     metrics_tracker["sam_mask_failures"] += 1
-                    metrics_tracker["total_reversions"] += 1
-                    def_w, def_h = 48.0, 22.0 
-                    x1_n = (gx - def_w / 2.0) / img_w
-                    y1_n = (gy - def_h / 2.0) / img_h
-                    x2_n = (gx + def_w / 2.0) / img_w
-                    y2_n = (gy + def_h / 2.0) / img_h
-                    yolo_obb = [x1_n, y1_n, x2_n, y1_n, x2_n, y2_n, x1_n, y2_n]
+                    metrics_tracker["total_dropped"] += 1
+                    continue
 
-                refined_labels.append([cls_id] + yolo_obb)
+                candidate_labels.append([cls_id] + yolo_obb)
 
-            final_clean_labels, corrections = geometric_correction_head(refined_labels, img_w, img_h)
-            metrics_tracker["geometric_corrections"] += corrections
-            metrics_tracker["total_reversions"] += corrections
+            # STEP 4: OBB Refinement / Final Filtering Stage
+            final_clean_labels, dropped_geom = filter_obb_labels(candidate_labels, img_w, img_h)
+            metrics_tracker["dropped_geometric"] += dropped_geom
+            metrics_tracker["total_dropped"] += dropped_geom
             
             dups = count_duplicate_boxes(final_clean_labels, img_w, img_h)
             metrics_tracker["duplicate_boxes"] += dups
@@ -421,54 +363,35 @@ def refine_dataset_dinov2(input_dir, output_dir, predictor, ref_img_path, ref_ma
                     f.write(f"{int(r[0])} {coords_str}\n")
                     
             if (idx + 1) % 50 == 0 or (idx + 1) == total_files:
-                print(f"    Progress: [{idx + 1}/{total_files}] processed target assets...", end="\r")
+                print(f"    Progress: [{idx + 1}/{total_files}] images processed...", end="\r")
         print()
 
-    # Diagnostics report export block
+    # Diagnostics report
     total_inst = metrics_tracker["total_targets_processed"]
-    reversions = metrics_tracker["total_reversions"]
-    duplicates = metrics_tracker["duplicate_boxes"]
+    dropped = metrics_tracker["total_dropped"]
     avg_dino = np.mean(metrics_tracker["dino_similarities"]) if metrics_tracker["dino_similarities"] else 0.0
     
-    reversion_pct = (reversions / total_inst) * 100 if total_inst > 0 else 0.0
-    success_pct = 100.0 - reversion_pct
+    dropped_pct = (dropped / total_inst) * 100 if total_inst > 0 else 0.0
+    retained_pct = 100.0 - dropped_pct
 
     report_path = output_root / "pipeline_refinement_metrics.txt"
     with open(report_path, "w") as f:
         f.write("=" * 65 + "\n")
-        f.write("      SAM + DINOv2 PSEUDO-LABEL REFINEMENT EXTRACTION STUDY\n")
+        f.write("      DINO -> SAM -> OBB REFINEMENT EVALUATION\n")
         f.write("=" * 65 + "\n")
-        f.write(f"Processed Dataset Target Root   : {output_root.name}\n")
-        f.write(f"Source Reference Material Path  : {input_root.name}\n")
+        f.write(f"Total Candidate Targets Fed     : {total_inst}\n")
+        f.write(f"Total Duplicate Boxes Dropped   : {metrics_tracker['duplicate_boxes']}\n")
+        f.write(f"Total Filtered / Dropped Boxes  : {dropped} ({dropped_pct:.2f}%)\n")
+        f.write(f"  - SAM Mask / Filter Failures  : {metrics_tracker['sam_mask_failures']}\n")
+        f.write(f"  - OBB Refinement Filter Drops : {metrics_tracker['dropped_geometric']}\n")
         f.write("-" * 65 + "\n")
-        f.write(f"Total Object Center Points Fed  : {total_inst}\n")
-        f.write(f"Total Duplicate Boxes Produced  : {duplicates}\n")
-        f.write(f"Total Reversions to Default Box : {reversions} ({reversion_pct:.2f}% of data)\n")
-        f.write(f"  - SAM Mask Failures           : {metrics_tracker['sam_mask_failures']}\n")
-        f.write(f"  - Geometric Head Outliers     : {metrics_tracker['geometric_corrections']}\n")
-        f.write("-" * 65 + "\n")
-        f.write(f"Pipeline Extraction Success Rate: {success_pct:.2f}%\n")
-        f.write(f"Mean DINOv2 Cosine Similarity   : {avg_dino:.4f}\n")
+        f.write(f"Final Retained Label Rate       : {retained_pct:.2f}%\n")
+        f.write(f"Mean DINO Similarity Score      : {avg_dino:.4f}\n")
         f.write("=" * 65 + "\n")
 
-    print(f"\n📊 Diagnostics report generated successfully at: {report_path}")
-
-    yaml_content = f"path: {output_root.absolute()}\n"
-    if has_subsplits:
-        if "train" in available_splits: yaml_content += "train: train/images\n"
-        if "val" in available_splits: yaml_content += "val: val/images\n"
-        if "test" in available_splits: yaml_content += "test: test/images\n"
-    else:
-        yaml_content += "train: images\nval: images\n"
-        
-    yaml_content += "\nnc: 1\nnames:\n  0: vehicle\n"
-    with open(output_root / "dataset.yaml", "w") as f:
-        f.write(yaml_content)
-        
-    print(f"🚀 Success! YOLO OBB dataset generated cleanly at: {output_root}")
+    print(f"\n📊 Diagnostic metrics exported to: {report_path}")
 
 if __name__ == "__main__":
-    # Standardized root directories to prevent folder layout clutter
     INPUT_DATASET = "datasets/vedai_1024/vedai_color_centerpoint"
     OUTPUT_DATASET = "datasets/vedai_1024/vedai_color_OBB_Refined"
     
@@ -478,12 +401,11 @@ if __name__ == "__main__":
     ref_mask_file = Path("datasets/vedai_1024/vedai_color_centerpoint/ref_mask.png")
     
     if ref_image_file.exists() and not ref_mask_file.exists():
-        print("[INFO] ref_mask.png not found. Auto-generating binary mask via Otsu's thresholding...")
         temp_img = cv2.imread(str(ref_image_file), cv2.IMREAD_GRAYSCALE)
         _, generated_mask = cv2.threshold(temp_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         cv2.imwrite(str(ref_mask_file), generated_mask)
         
-    refine_dataset_dinov2(
+    run_dino_sam_obb_pipeline(
         input_dir=INPUT_DATASET,
         output_dir=OUTPUT_DATASET,
         predictor=sam_predictor,

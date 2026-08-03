@@ -2,9 +2,11 @@
 
 import os
 import shutil
+import cv2
+import numpy as np
 from pathlib import Path
 
-def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_vehicle_class=True):
+def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_vehicle_class=True, apply_strict_geom_filter=False):
     src_img_dir = Path(src_img_dir)
     src_anno_dir = Path(src_anno_dir)
     output_base_dir = Path(output_base_dir)
@@ -28,7 +30,11 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
     
     success_count = 0
     total_vehicles_kept = 0
-    total_vehicles_dropped = 0
+    total_vehicles_dropped_semantic = 0
+    total_vehicles_dropped_geometric = 0
+    
+    # 1024x1024 dimensions
+    img_w, img_h = 1024.0, 1024.0
     
     for anno_path in anno_files:
         base_name = anno_path.stem  # e.g., '00000001'
@@ -58,29 +64,47 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
                 orig_class = int(parts[3])
                 
                 # =========================================================
-                # STRICT SEMANTIC FILTER (COWC Aligned)
-                # KEEPS: 1=Car, 2=Pickup, 9=Van
-                # DROPS: 4=Truck, 5=Semi, 7=Tractor, 8=Camping Car, 11=Boat, 3=Plane
+                # 1. SEMANTIC FILTER
+                # Standard VEDAI Road Vehicles: 1=Car, 2=Pickup, 4=Truck, 9=Van
+                # Add 5=Semi, 7=Tractor, 8=Camping Car if you want all ground vehicles.
                 # =========================================================
-                if orig_class not in [1, 2, 9]:
-                    total_vehicles_dropped += 1
+                road_vehicles = {1, 2, 4, 5, 7, 8, 9}
+                if orig_class not in road_vehicles:
+                    total_vehicles_dropped_semantic += 1
                     continue
                     
-                total_vehicles_kept += 1
-                
-                # Map to generic '0' if tracking as a single vehicle class
-                class_id = 0 if map_to_vehicle_class else orig_class
-                
-                # =========================================================
-                # UPDATED SCALE DOMAIN FOR 1024x1024 VARIANT
-                # =========================================================
-                img_w, img_h = 1024.0, 1024.0
-                
-                # 1. Compute YOLO OBB Format (8 coordinate points)
+                # Extract original pixel coordinates
                 x_coords = [float(parts[6]), float(parts[7]), float(parts[8]), float(parts[9])]
                 y_coords = [float(parts[10]), float(parts[11]), float(parts[12]), float(parts[13])]
                 
-                # Normalize between 0.0 and 1.0 and clip to safety
+                # =========================================================
+                # 2. OPTIONAL GEOMETRIC FILTER
+                # Default is FALSE: We keep all annotated ground targets
+                # =========================================================
+                if apply_strict_geom_filter:
+                    pts = np.array([
+                        [x_coords[0], y_coords[0]],
+                        [x_coords[1], y_coords[1]],
+                        [x_coords[2], y_coords[2]],
+                        [x_coords[3], y_coords[3]]
+                    ], dtype=np.float32)
+                    
+                    rect = cv2.minAreaRect(pts)
+                    (cx, cy), (w, h), angle = rect
+                    max_dim = max(w, h)
+                    min_dim = min(w, h)
+                    aspect = max_dim / (min_dim + 1e-6)
+                    
+                    is_bad_box = max_dim > 95 or max_dim < 12 or aspect > 3.5
+                    if is_bad_box:
+                        total_vehicles_dropped_geometric += 1
+                        continue
+
+                # Box retained!
+                total_vehicles_kept += 1
+                class_id = 0 if map_to_vehicle_class else orig_class
+                
+                # Compute YOLO OBB Format (8 coordinate points normalized)
                 x_norm = [max(0.0, min(1.0, x / img_w)) for x in x_coords]
                 y_norm = [max(0.0, min(1.0, y / img_h)) for y in y_coords]
                 
@@ -92,19 +116,12 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
                     f"{x_norm[3]:.6f} {y_norm[3]:.6f}\n"
                 )
                 
-                # 2. Correct VEDAI Indexing for Centerpoints
+                # Centerpoints Format (x_center, y_center, dummy_w, dummy_h)
                 x_center = max(0.0, min(1.0, float(parts[0]) / img_w))
                 y_center = max(0.0, min(1.0, float(parts[1]) / img_h))
-                
-                # Standard normalized box placeholder dimension for point verification
                 center_lines.append(f"{class_id} {x_center:.6f} {y_center:.6f} 0.005000 0.005000\n")
                 
-        # If no valid vehicles were found in this image after filtering, skip it
-        if len(obb_lines) == 0:
-            continue
-            
-        # Save isolated outputs across all four operational directories
-        
+        # Save output image-annotation pairs
         # Color (CO) Outputs
         shutil.copy(co_img_path, dirs["co_bbox"] / "images" / co_img_path.name)
         shutil.copy(co_img_path, dirs["co_center"] / "images" / co_img_path.name)
@@ -126,19 +143,22 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
         success_count += 1
 
     print(f"\nProcessing complete! Successfully structured {success_count} aligned image pairs.")
-    print(f"  - Vehicles retained (Cars/Pickups/Vans): {total_vehicles_kept}")
-    print(f"  - Outliers dropped (Trucks/Boats/Etc):   {total_vehicles_dropped}")
+    print(f"  - Retained Vehicle Targets: {total_vehicles_kept}")
+    print(f"  - Dropped by Semantic Class: {total_vehicles_dropped_semantic}")
+    print(f"  - Dropped by Geometric Filter: {total_vehicles_dropped_geometric}")
     print(f"Datasets generated under: {output_base_dir.resolve()}")
 
 if __name__ == "__main__":
-    # Pointing to the directories where you extracted your 1024 dataset files
     RAW_VEDAI_IMAGES = "data/VEDAI/Vehicules1024" 
     RAW_VEDAI_ANNOTATIONS = "data/VEDAI/Annotations1024"
-    
-    # Destination directory for the 4 separated test datasets
     OUTPUT_STUDY_DIR = "datasets/vedai_1024"
-    
-    # Map all targets down to a single global class '0' for clean auto-relabel testing
     MAP_TO_SINGLE_VEHICLE = True
     
-    process_vedai_dataset(RAW_VEDAI_IMAGES, RAW_VEDAI_ANNOTATIONS, OUTPUT_STUDY_DIR, MAP_TO_SINGLE_VEHICLE)
+    # Set apply_strict_geom_filter=False to keep all valid bounding boxes
+    process_vedai_dataset(
+        RAW_VEDAI_IMAGES, 
+        RAW_VEDAI_ANNOTATIONS, 
+        OUTPUT_STUDY_DIR, 
+        map_to_vehicle_class=MAP_TO_SINGLE_VEHICLE,
+        apply_strict_geom_filter=False
+    )

@@ -8,9 +8,9 @@ import numpy as np
 from tqdm import tqdm
 
 # --- Configuration ---
-DATA_DIR = "data/ground_truth_sets"  
-OUTPUT_DIR = "datasets/20260630_COWC_1024"
-WINDOW_SIZE = 512
+DATA_DIR = "data/COWC"  
+OUTPUT_DIR = "datasets/20260727_COWC_Points_512"
+WINDOW_SIZE = 512 # How big you want the tiles 1024, 512, 256, 128 etc.
 STRIDE = 256  # 50% overlap guarantees cars are fully in at least one frame
 
 # Approximate bounding box size in pixels to encapsulate a car around the dot
@@ -19,8 +19,9 @@ CLASS_ID = 0   # 0 for car
 
 # Splits by City (Test split dissolved into train/val)
 SPLITS = {
-    "train": ["Toronto_ISPRS", "Selwyn_LINZ", "Utah_AGRC", "Potsdam_ISPRS"],
-    "val": ["Vaihingen_ISPRS", "Columbus_CSUAV_AFRL"]
+    "train": ["Toronto_ISPRS", "Selwyn_LINZ", "Utah_AGRC"],
+    "val": ["Vaihingen_ISPRS"],
+    "test": ["Potsdam_ISPRS", "Columbus_CSUAV_AFRL"]
 }
 
 def setup_directories():

@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
 
 import os
-import json
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 from pathlib import Path
 from shapely.geometry import Polygon
 
-def obb_to_polygon(obb_coords, img_w=1024.0, img_h=1024.0):
-    """Converts 8 normalized OBB coordinates [x1, y1, x2, y2, x3, y3, x4, y4] to a Shapely Polygon."""
+# =========================================================
+# VEDAI Target Classes
+# Target (Evaluated): 1 = Car, 2 = Pickup
+# Ignored (Not Penalized): 4 = Truck, 5 = Semi, 9 = Van, etc.
+# =========================================================
+TARGET_CLASSES = {1, 2} 
+
+def obb_to_polygon(obb_coords, is_normalized=True, img_w=1024.0, img_h=1024.0):
+    """Converts OBB coordinates to a Shapely Polygon."""
     pts = np.array(obb_coords).reshape(4, 2)
-    # Scale back to absolute pixel dimensions for exact polygon math
-    pts[:, 0] *= img_w
-    pts[:, 1] *= img_h
+    
+    # YOLO format is normalized, raw VEDAI is absolute
+    if is_normalized:
+        pts[:, 0] *= img_w
+        pts[:, 1] *= img_h
+        
     poly = Polygon(pts)
     if not poly.is_valid:
         poly = poly.buffer(0)
     return poly
 
 def compute_obb_iou(poly1, poly2):
-    """Computes the exact Intersection over Union between two oriented polygons."""
+    """Computes exact Intersection over Union between oriented polygons."""
     try:
         inter_area = poly1.intersection(poly2).area
         union_area = poly1.area + poly2.area - inter_area
@@ -28,147 +36,200 @@ def compute_obb_iou(poly1, poly2):
     except Exception:
         return 0.0
 
-def load_yolo_obb_file(file_path):
-    """Parses a YOLO OBB text file returning a list of dicts: {'class': int, 'poly': Polygon}."""
-    targets = []
+def load_raw_vedai_gt(file_path):
+    """
+    Parses original VEDAI 14-column labels.
+    Assigns eval_class 0 to targets, and -1 to ignored classes to avoid penalizing them.
+    """
+    gt_items = []
     if not file_path.exists():
-        return targets
+        return gt_items
+    
+    with open(file_path, "r") as f:
+        for line in f:
+            parts = line.strip().split()
+            try:
+                if len(parts) >= 14:
+                    orig_class = int(parts[3])
+                    
+                    # Strict target matching[cite: 1]
+                    eval_class = 0 if orig_class in TARGET_CLASSES else -1
+                    
+                    # Extract absolute pixel coordinates[cite: 1]
+                    x_coords = [float(x) for x in parts[6:10]]
+                    y_coords = [float(y) for y in parts[10:14]]
+                    coords = [
+                        x_coords[0], y_coords[0],
+                        x_coords[1], y_coords[1],
+                        x_coords[2], y_coords[2],
+                        x_coords[3], y_coords[3]
+                    ]
+                    
+                    poly = obb_to_polygon(coords, is_normalized=False)
+                    gt_items.append({'class': eval_class, 'poly': poly})
+            except (ValueError, IndexError):
+                continue
+    return gt_items
+
+def load_pipeline_preds(file_path):
+    """Parses pipeline refined YOLO OBB (9-column) text files."""
+    preds = []
+    if not file_path.exists():
+        return preds
     with open(file_path, 'r') as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) < 9:
                 continue
-            cls_id = int(parts[0])
             coords = [float(x) for x in parts[1:9]]
-            poly = obb_to_polygon(coords)
-            targets.append({'class': cls_id, 'poly': poly})
-    return targets
+            poly = obb_to_polygon(coords, is_normalized=True)
+            preds.append(poly)
+    return preds
 
-def run_evaluation(gt_dir, pred_dir, output_dir, iou_threshold=0.50):
-    gt_root = Path(gt_dir)
+def run_evaluation(raw_gt_dir, pred_dir, output_dir, iou_threshold=0.50):
+    raw_gt_root = Path(raw_gt_dir)
     pred_root = Path(pred_dir)
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    gt_lbl_dir = gt_root / "labels" if (gt_root / "labels").exists() else gt_root
     pred_lbl_dir = pred_root / "labels" if (pred_root / "labels").exists() else pred_root
+    pred_files = list(pred_lbl_dir.glob("*.txt"))
+    
+    print(f"🧐 Found {len(pred_files)} pipeline prediction files. Cross-referencing raw VEDAI data...")
 
-    gt_files = list(gt_lbl_dir.glob("*.txt"))
-    print(f"🧐 Found {len(gt_files)} ground-truth text annotations to validate...")
-
-    # We account for vehicle (0) and background/missed (1) for confusion matrix structure
-    # Class 0: Vehicle, Class 1: Background (used to track FPs / FNs cleanly)
-    confusion_data = {"TP": 0, "FP": 0, "FN": 0}
+    confusion_data = {"Success": 0, "Pipeline_Failure": 0, "Ignored_Targets_Hit": 0}
     all_ious = []
 
-    for gt_path in gt_files:
-        pred_path = pred_lbl_dir / gt_path.name
+    for pred_path in pred_files:
+        # Map pipeline name (00000001_co.txt) back to raw VEDAI annotation (00000001.txt)
+        raw_gt_stem = pred_path.stem.split('_')[0] 
+        gt_path = raw_gt_root / f"{raw_gt_stem}.txt"
         
-        gt_boxes = load_yolo_obb_file(gt_path)
-        pred_boxes = load_yolo_obb_file(pred_path)
-
-        matched_preds = set()
-
-        for gt_box in gt_boxes:
-            best_iou = 0.0
-            best_pred_idx = -1
+        gt_boxes = load_raw_vedai_gt(gt_path)
+        pred_polys = load_pipeline_preds(pred_path)
+        
+        # Isolate targets (Cars/Pickups) from ignored classes (Trucks/Semis)[cite: 1]
+        valid_gts = [gt['poly'] for gt in gt_boxes if gt['class'] == 0]
+        ignore_gts = [gt['poly'] for gt in gt_boxes if gt['class'] == -1]
+        
+        # 1. Filter predictions hitting ignored (DontCare) targets[cite: 1]
+        valid_preds = []
+        for p_poly in pred_polys:
+            hit_ignore = False
+            for ig_poly in ignore_gts:
+                if compute_obb_iou(p_poly, ig_poly) > iou_threshold:
+                    hit_ignore = True
+                    confusion_data["Ignored_Targets_Hit"] += 1
+                    break
             
-            for idx, pred_box in enumerate(pred_boxes):
+            # Only keep predictions that don't overlap with a truck/semi[cite: 1]
+            if not hit_ignore:
+                valid_preds.append(p_poly)
+                
+        # 2. Match remaining valid predictions against strict Target Cars/Pickups
+        matched_preds = set()
+        for v_gt in valid_gts:
+            best_iou = 0.0
+            best_idx = -1
+            
+            # Greedy matching for target polygons[cite: 1]
+            for idx, v_pred in enumerate(valid_preds):
                 if idx in matched_preds:
                     continue
-                iou = compute_obb_iou(gt_box['poly'], pred_box['poly'])
+                iou = compute_obb_iou(v_gt, v_pred)
                 if iou > best_iou:
                     best_iou = iou
-                    best_pred_idx = idx
-
-            if best_iou >= iou_threshold:
-                confusion_data["TP"] += 1
-                matched_preds.add(best_pred_idx)
+                    best_idx = idx
+                    
+            # Check if prediction meets overlap threshold for success
+            if best_iou >= iou_threshold and best_idx != -1:
+                confusion_data["Success"] += 1
+                matched_preds.add(best_idx)
                 all_ious.append(best_iou)
             else:
-                confusion_data["FN"] += 1  # Human labeled it, pipeline missed it
+                # PENALIZED: Pipeline failed SAM on a valid car, or filtered it by mistake
+                confusion_data["Pipeline_Failure"] += 1
 
-        # Any predicted box that didn't match a human label is an auto-labeling False Positive
-        fps_in_file = len(pred_boxes) - len(matched_preds)
-        confusion_data["FP"] += fps_in_file
-
-    # Compute Core Machine Learning Pipeline Metrics
-    tp, fp, fn = confusion_data["TP"], confusion_data["FP"], confusion_data["FN"]
-    precision = tp / (tp + fp + 1e-6)
-    recall = tp / (tp + fn + 1e-6)
-    f1_score = 2 * (precision * recall) / (precision + recall + 1e-6)
+    # Compute Output Metrics
+    successes = confusion_data["Success"]
+    failures = confusion_data["Pipeline_Failure"]
+    ignored_hit = confusion_data["Ignored_Targets_Hit"]
+    total_valid_targets = successes + failures
+    
     mean_iou = np.mean(all_ious) if all_ious else 0.0
+    success_rate = (successes / total_valid_targets * 100) if total_valid_targets > 0 else 0.0
 
-    # Write out diagnostic metrics report text file
+    # Write Diagnostics Report
     report_path = out_root / "pipeline_evaluation_report.txt"
     with open(report_path, "w") as f:
         f.write("==================================================\n")
-        f.write("   DINOv2 + PerSAM AUTO-LABELING VALIDATION REPORT\n")
+        f.write("   SAM + DINO STRICT TARGET EVALUATION REPORT\n")
         f.write("==================================================\n")
-        f.write(f"Ground Truth Directory : {gt_lbl_dir.resolve()}\n")
+        f.write(f"Raw Annotations Dir    : {raw_gt_root.resolve()}\n")
         f.write(f"Pipeline Prediction Dir: {pred_lbl_dir.resolve()}\n")
         f.write(f"IoU Matching Threshold : {iou_threshold}\n")
         f.write("--------------------------------------------------\n")
-        f.write(f"True Positives (TP)    : {tp}\n")
-        f.write(f"False Positives (FP)   : {fp}  <-- (Shadows/Pavement Errors)\n")
-        f.write(f"False Negatives (FN)   : {fn}  <-- (Missed Vehicles)\n")
+        f.write(f"Total Target Vehicles (Cars/Pickups) : {total_valid_targets}\n")
+        f.write(f"Pipeline Successes (TP)              : {successes}\n")
+        f.write(f"Pipeline Failures (Penalized FN)     : {failures}\n")
+        f.write(f"Ignored Objects Detected (No Penalty): {ignored_hit}\n")
         f.write("--------------------------------------------------\n")
-        f.write(f"Precision              : {precision:.4f}\n")
-        f.write(f"Recall                 : {recall:.4f}\n")
-        f.write(f"F1-Score               : {f1_score:.4f}\n")
-        f.write(f"Mean Oriented IoU (mIoU): {mean_iou:.4f}\n")
+        f.write(f"Strict Target Alignment Accuracy     : {success_rate:.2f}%\n")
+        f.write(f"Mean Oriented IoU (Success)          : {mean_iou:.4f}\n")
         f.write("==================================================\n")
 
     print(f"\n📊 Performance Metrics Logged to: {report_path}")
 
-    # =======================================================
-    # 📉 GENERATING GRAPHS FOR YOUR PRESENTATION
-    # =======================================================
-    sns.set_theme(style="whitegrid")
+    # Render Sleek Presentation Chart
+    data = [successes, failures]
+    colors = ['#2A75D3', '#EF5350'] # Corporate Steel Blue & Soft Coral
     
-    # Graph 1: 2x2 Normalized OBB Confusion Matrix
-    cm = np.array([[tp, fn], 
-                   [fp, 0]]) # standard object detection evaluation layout (no true negative background tracking)
+    fig, ax = plt.subplots(figsize=(8, 5.5), facecolor='white')
     
-    plt.figure(figsize=(7, 5))
-    labels = ['Vehicle', 'Background\n(Missed/Shadow)']
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=labels, yticklabels=labels, cbar=False, annot_kws={"size": 14})
-    plt.ylabel('Human Ground Truth', fontsize=12, fontweight='bold')
-    plt.xlabel('PerSAM+DINOv2 Pipeline', fontsize=12, fontweight='bold')
-    plt.title('Oriented Bounding Box Confusion Matrix', fontsize=14, fontweight='bold', pad=15)
+    wedges, texts, autotexts = ax.pie(
+        data, 
+        colors=colors, 
+        autopct='%1.1f%%', 
+        startangle=90, 
+        pctdistance=0.5,
+        textprops={'fontsize': 14, 'fontweight': 'bold', 'color': 'white'},
+        wedgeprops={'edgecolor': 'white', 'linewidth': 2}
+    )
+    
+    plt.title('SAM + DINO Target Vehicle Pipeline Success\n(Excludes Trucks, Semis, Vans)', 
+              fontsize=16, fontweight='bold', pad=15, color='#333333', loc='center')
+
+    legend_labels = [
+        f"Success (IoU $\geq$ {iou_threshold})\n{successes} boxes", 
+        f"Pipeline Failure (Cars Only)\n{failures} boxes"
+    ]
+    ax.legend(
+        wedges, 
+        legend_labels,
+        title="Evaluated Outcomes",
+        title_fontproperties={'weight':'bold', 'size': 12},
+        loc="center left", 
+        bbox_to_anchor=(1, 0.5),
+        frameon=False,
+        fontsize=11,
+        labelspacing=1.2
+    )
+    
     plt.tight_layout()
-    plt.savefig(out_root / "confusion_matrix.png", dpi=300)
+    plt.savefig(out_root / "alignment_success_pie_chart.png", dpi=300, bbox_inches='tight')
     plt.close()
 
-    # Graph 2: Summary Metrics Bar Chart
-    plt.figure(figsize=(8, 4.5))
-    metrics_elements = ['Precision', 'Recall', 'F1-Score', 'Mean IoU']
-    values_elements = [precision, recall, f1_score, mean_iou]
-    colors = ['#1f77b4', '#aec7e8', '#ff7f0e', '#2ca02c']
-    
-    bars = plt.bar(metrics_elements, values_elements, color=colors, width=0.5, edgecolor='black', linewidth=0.7)
-    plt.ylim(0, 1.05)
-    plt.title('PerSAM + DINOv2 Pipeline Summary Metrics', fontsize=14, fontweight='bold', pad=15)
-    
-    for bar in bars:
-        yval = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2.0, yval + 0.02, f"{yval:.3f}", ha='center', va='bottom', fontsize=11, fontweight='bold')
-        
-    plt.tight_layout()
-    plt.savefig(out_root / "pipeline_summary_metrics.png", dpi=300)
-    plt.close()
-
-    print(f"🎨 Presentation graphics successfully rendered under: {out_root.resolve()}/")
+    print(f"🎨 Presentation graphics rendered to: {out_root.resolve()}/")
 
 if __name__ == "__main__":
-    # Your standardized clean tracking paths
-    HUMAN_GROUND_TRUTH = "datasets/vedai_1024/vedai_color_obb"  # Core filtered human truth set
-    PIPELINE_REFINED   = "datasets/vedai_1024/vedai_color_OBB_Refined"    # Your refined pipeline output folder
-    EVAL_OUTPUT_DIR    = "visuals/vedai_color_evaluation_results"        # Target diagnostic export directory
+    # Point directly to RAW Annotations to retain VEDAI class IDs
+    RAW_VEDAI_ANNOTATIONS = "data/VEDAI/Annotations1024"
+    PIPELINE_REFINED      = "datasets/vedai_1024/vedai_color_OBB_Refined"
+    EVAL_OUTPUT_DIR       = "visuals/vedai_color_evaluation_results"
 
     run_evaluation(
-        gt_dir=HUMAN_GROUND_TRUTH,
+        raw_gt_dir=RAW_VEDAI_ANNOTATIONS,
         pred_dir=PIPELINE_REFINED,
         output_dir=EVAL_OUTPUT_DIR,
-        iou_threshold=0.50  # Minimum IoU match requirement
+        iou_threshold=0.50
     )
