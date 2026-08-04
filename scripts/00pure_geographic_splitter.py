@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 # --- Configuration ---
 DATA_DIR = "data/COWC"  
-OUTPUT_DIR = "datasets/20260727_COWC_Points_512"
+OUTPUT_DIR = "datasets/COWC_Points_512"
 WINDOW_SIZE = 512 # How big you want the tiles 1024, 512, 256, 128 etc.
 STRIDE = 256  # 50% overlap guarantees cars are fully in at least one frame
 

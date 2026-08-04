@@ -392,13 +392,13 @@ def run_dino_sam_obb_pipeline(input_dir, output_dir, predictor, ref_img_path, re
     print(f"\n📊 Diagnostic metrics exported to: {report_path}")
 
 if __name__ == "__main__":
-    INPUT_DATASET = "datasets/vedai_1024/vedai_color_centerpoint"
-    OUTPUT_DATASET = "datasets/vedai_1024/vedai_color_OBB_Refined"
+    INPUT_DATASET = "datasets/vedai_512/vedai_color_centerpoint"
+    OUTPUT_DATASET = "datasets/vedai_512/vedai_color_OBB_Refined"
     
     sam_predictor = load_sam("models/sam_vit_b.pth")
 
-    ref_image_file = Path("datasets/vedai_1024/vedai_color_centerpoint/ref_car.png")
-    ref_mask_file = Path("datasets/vedai_1024/vedai_color_centerpoint/ref_mask.png")
+    ref_image_file = Path("datasets/vedai_512/vedai_color_centerpoint/ref_car.png")
+    ref_mask_file = Path("datasets/vedai_512/vedai_color_centerpoint/ref_mask.png")
     
     if ref_image_file.exists() and not ref_mask_file.exists():
         temp_img = cv2.imread(str(ref_image_file), cv2.IMREAD_GRAYSCALE)

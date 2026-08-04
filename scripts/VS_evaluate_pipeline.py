@@ -13,7 +13,7 @@ from shapely.geometry import Polygon
 # =========================================================
 TARGET_CLASSES = {1, 2} 
 
-def obb_to_polygon(obb_coords, is_normalized=True, img_w=1024.0, img_h=1024.0):
+def obb_to_polygon(obb_coords, is_normalized=True, img_w=512.0, img_h=512.0):
     """Converts OBB coordinates to a Shapely Polygon."""
     pts = np.array(obb_coords).reshape(4, 2)
     
@@ -223,8 +223,8 @@ def run_evaluation(raw_gt_dir, pred_dir, output_dir, iou_threshold=0.50):
 
 if __name__ == "__main__":
     # Point directly to RAW Annotations to retain VEDAI class IDs
-    RAW_VEDAI_ANNOTATIONS = "data/VEDAI/Annotations1024"
-    PIPELINE_REFINED      = "datasets/vedai_1024/vedai_color_OBB_Refined"
+    RAW_VEDAI_ANNOTATIONS = "data/VEDAI/Annotations512"
+    PIPELINE_REFINED      = "datasets/vedai_512/vedai_color_OBB_Refined"
     EVAL_OUTPUT_DIR       = "visuals/vedai_color_evaluation_results"
 
     run_evaluation(

@@ -33,8 +33,8 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
     total_vehicles_dropped_semantic = 0
     total_vehicles_dropped_geometric = 0
     
-    # 1024x1024 dimensions
-    img_w, img_h = 1024.0, 1024.0
+    # 512x512 dimensions
+    img_w, img_h = 512.0, 512.0
     
     for anno_path in anno_files:
         base_name = anno_path.stem  # e.g., '00000001'
@@ -149,9 +149,9 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
     print(f"Datasets generated under: {output_base_dir.resolve()}")
 
 if __name__ == "__main__":
-    RAW_VEDAI_IMAGES = "data/VEDAI/Vehicules1024" 
-    RAW_VEDAI_ANNOTATIONS = "data/VEDAI/Annotations1024"
-    OUTPUT_STUDY_DIR = "datasets/vedai_1024"
+    RAW_VEDAI_IMAGES = "data/VEDAI/Vehicules512" 
+    RAW_VEDAI_ANNOTATIONS = "data/VEDAI/Annotations512"
+    OUTPUT_STUDY_DIR = "datasets/vedai_512"
     MAP_TO_SINGLE_VEHICLE = True
     
     # Set apply_strict_geom_filter=False to keep all valid bounding boxes

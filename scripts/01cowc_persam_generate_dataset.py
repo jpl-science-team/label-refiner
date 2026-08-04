@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from pathlib import Path
+from tqdm import tqdm
 from segment_anything import sam_model_registry, SamPredictor
 
 # ---------------------------------------------------------
@@ -191,44 +192,56 @@ def refine_dataset_persam(input_root, output_root, predictor, ref_img_path, ref_
     print("Extracting Personalized DINOv2 target signature map...")
     target_weight = get_persam_weights(predictor, ref_img, ref_mask_raw)
 
-    datasets = ["cowc"]
+    datasets = ["COWC_Points_512"]
     splits = ["train", "val", "test"]
 
     for dataset in datasets:
         print(f"\n=== Running PerSAM Refinement: {dataset} ===")
         
-        dataset_out_dir = output_root / dataset
+        dataset_out_dir = output_root / "COWC_512"
         dataset_out_dir.mkdir(parents=True, exist_ok=True)
 
         for split in splits:
-            in_img_dir = input_root / dataset / "images" / split
-            in_lbl_dir = input_root / dataset / "labels" / split
-            out_img_dir = dataset_out_dir / "images" / split
-            out_lbl_dir = dataset_out_dir / "labels" / split
+            # Input: Read from the split's images and labels subdirectories
+            in_img_dir = input_root / dataset / split / "images"
+            in_lbl_dir = input_root / dataset / split / "labels"
+            
+            # Output: Save into images and labels subdirectories
+            out_img_dir = dataset_out_dir / split / "images"
+            out_lbl_dir = dataset_out_dir / split / "labels"
 
-            # Skip split if it doesn't exist in the input directory
             if not in_img_dir.exists():
+                print(f"[ERROR] Skipping split '{split}': Directory not found -> {in_img_dir}")
                 continue
                 
-            print(f"--> Processing split: {split}")
+            print(f"--> Processing split: {split} from {in_img_dir}")
 
             out_img_dir.mkdir(parents=True, exist_ok=True)
             out_lbl_dir.mkdir(parents=True, exist_ok=True)
 
             image_list = sorted([f for f in os.listdir(in_img_dir) if f.lower().endswith((".png", ".jpg", ".jpeg"))])
+            
+            if len(image_list) == 0:
+                print(f"[WARNING] No images (.png, .jpg) found in {in_img_dir}")
+                continue
 
-            for img_name in image_list:
+            processed_count = 0
+
+            for img_name in tqdm(image_list, desc=f"Processing {split}"):
                 img_path = in_img_dir / img_name
                 lbl_path = in_lbl_dir / (Path(img_name).stem + ".txt")
 
+
                 if not lbl_path.exists():
+                    print(f"[WARNING] Skipping {img_name}: Missing label file at {lbl_path}")
                     continue
 
                 img = cv2.imread(str(img_path))
                 if img is None:
+                    print(f"[WARNING] Skipping {img_name}: Unable to read image file.")
                     continue
+                
                 img_h, img_w = img.shape[:2]
-
                 cv2.imwrite(str(out_img_dir / img_name), img)
 
                 with open(lbl_path) as f:
@@ -289,6 +302,10 @@ def refine_dataset_persam(input_root, output_root, predictor, ref_img_path, ref_
                     for r in final_clean_labels:
                         coords_str = " ".join(f"{c:.6f}" for c in r[1:])
                         f.write(f"{int(r[0])} {coords_str}\n")
+                
+                processed_count += 1
+
+            print(f"    Successfully processed {processed_count} images for split '{split}'.")
 
         print(f"✔ Dataset processing complete: {dataset}")
         
@@ -296,9 +313,9 @@ def refine_dataset_persam(input_root, output_root, predictor, ref_img_path, ref_
         # Generate YAML configuration file for YOLO training
         # ---------------------------------------------------------
         yaml_content = f"""path: {dataset_out_dir.absolute()}
-train: images/train
-val: images/val
-test: images/test
+train: train/images
+val: val/images
+test: test/images
 
 # Classes
 names:
@@ -315,13 +332,12 @@ names:
 if __name__ == "__main__":
     sam_predictor, dev_env = load_sam("models/sam_vit_b.pth")
 
-    ref_image_file = Path("datasets/cowc/ref_car.png")
-    ref_mask_file = Path("datasets/cowc/ref_mask.png")
+    ref_image_file = Path("datasets/COWC_Points_512/ref_car.png")
+    ref_mask_file = Path("datasets/COWC_Points_512/ref_mask.png")
     
     if ref_image_file.exists() and not ref_mask_file.exists():
-        print("[INFO] ref_mask.png not found. Auto-generating binary mask from template brightness thresholds...")
         temp_img = cv2.imread(str(ref_image_file), cv2.IMREAD_GRAYSCALE)
-        _, generated_mask = cv2.threshold(temp_img, 15, 255, cv2.THRESH_BINARY)
+        _, generated_mask = cv2.threshold(temp_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         cv2.imwrite(str(ref_mask_file), generated_mask)
 
     refine_dataset_persam(

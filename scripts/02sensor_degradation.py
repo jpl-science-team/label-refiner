@@ -109,7 +109,7 @@ if __name__ == "__main__":
     # ---------------------------------------------------------
     
     # Your clean dataset containing your 15GSD
-    SRC_DATASET = "datasets/cowc_512"
+    SRC_DATASET = "datasets_refined/cowc_512"
     
     # The target folder where the degraded images and pristine labels will be saved
     DEGRADED_DATASET = "datasets/cowc_512_sensor_degraded"
