@@ -88,26 +88,33 @@ Copy and paste these commands into your terminal to clone the code and build an 
 
 
 # 1. Clone the repository and enter the folder
+```bash
 git clone https://github.jpl.nasa.gov/science-team-algorithms/label-refiner.git
 cd label-refiner
-
+```
 # 2. Create the Conda environment
+```bash
 conda create -n label-refiner python=3.10 -y
-
+```
 # 3. Activate the environment
+```bash
 conda activate label-refiner
-
+```
 # 4. Install all required dependencies
+```bash
 pip install -r requirements.txt
-
+```
 # 5. Setup Reference Image Artifact
 Move the reference image (ref_car.png) into the target dataset directory where PerSAM expects to find it.
 
 # 1. Create target dataset staging folder
+```bash
 mkdir -p datasets/COWC_Points_512
-
+```
 # 2. Move ref_car.png from the repository root into the dataset folder
+```bash
 mv ref_car.png datasets/COWC_Points_512/ref_car.png
+```
 
 📂 Data Setup & Extraction
 Download the raw DATA folder from the Google Drive Link and place the .zip / .tar files into the data/ directory.
