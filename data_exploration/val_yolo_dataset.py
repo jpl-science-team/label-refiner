@@ -88,12 +88,12 @@ def main():
 
     # Paths configured dynamically via the SPLIT target selection variable
     root_dir = Path(root_path)
-    img_dir = root_dir / "images" / SPLIT
-    lbl_dir = root_dir / "labels" / SPLIT
+    img_dir = root_dir / SPLIT / "images"
+    lbl_dir = root_dir / SPLIT / "labels"
     
     # Target directories for moved files (keeps splits clean inside needs_refinement)
-    refine_img_dir = root_dir / "needs_refinement" / "images" / SPLIT
-    refine_lbl_dir = root_dir / "needs_refinement" / "labels" / SPLIT
+    refine_img_dir = root_dir / "needs_refinement" / SPLIT / "images" 
+    refine_lbl_dir = root_dir / "needs_refinement" / SPLIT / "labels"
     
     if not img_dir.exists():
         print(f"Directory missing or unreadable: {img_dir}")

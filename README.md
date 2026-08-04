@@ -1,80 +1,107 @@
-# Label Refiner & Small Object Detection Tools
+Label Refiner & Small Object Detection Tools
+This repository provides an automated pipeline for preparing, exploring, and refining small-object datasets—specifically targeting COWC variants, VEDAI, and other aerial imagery sources.
 
-This repository provides an automated pipeline for preparing, exploring, and refining small-object datasets—specifically targeting COWC variants and other aerial imagery sources. 
+The primary objective is to generate clean, consistent YOLO-style Oriented Bounding Box (OBB) labels by leveraging the Segment Anything Model (SAM) and Personalized SAM (PerSAM) for bounding box refinement.
 
-The primary objective is to generate clean, consistent YOLO-style labels by leveraging the **Segment Anything Model (SAM)** and **Personalized SAM (PerSAM)** for bounding box refinement. The repository is structured to handle dataset transformation, inspection, automated quality filtering, and experimental split locking within a reproducible, isolated environment.
+🌴 Directory Structure
+Use this file tree to check your directory setup.
 
-The Steps include to run this directory for complete beginers non coders, non conda users, non technical people to run 
+Plaintext
+label-refiner/
+├── README.md
+├── requirements.txt
+├── ref_car.png                     <-- Reference vehicle crop placed here initially
+├── models/
+│   └── sam_vit_b.pth               <-- Included pre-trained SAM checkpoint
+├── data/                           <-- Extracted raw datasets
+│   ├── COWC/
+│   └── VEDAI/
+├── datasets/                       <-- Pipeline staging area
+│   └── COWC_Points_512/
+│       ├── ref_car.png             <-- Moved here before running PerSAM
+│       ├── train/
+│       ├── val/
+│       └── test/
+├── datasets_refined/               <-- Generated output datasets
+│   └── COWC_512/
+│       ├── data.yaml
+│       ├── train/
+│       ├── val/
+│       └── test/
+├── scripts/                        <-- Processing scripts
+│   ├── 00cowc_preprocess.py
+│   ├── 00pure_geographic_splitter.py
+│   ├── 01cowc_persam_generate_dataset.py
+│   ├── 02sensor_degradation.py
+│   ├── VS_VEDAI_Separation_Conversion.py
+│   ├── VS_PerSAM_DINOv2.py
+│   └── VS_evaluate_pipeline.py
+└── data_exploration/               <-- Inspection and validation tools
+    └── val_yolo_dataset.py
+🛠️ Complete Beginner's Setup Guide
+If you have never used Conda or Terminal before, follow these step-by-step commands in order.
 
----
+1. Install Miniforge3 (Conda Environment Manager)
+If you do not have Conda installed, run the following commands in your terminal:
 
-🚀 Features
-Test Subset & Preprocessing Scripts (00*): Utility scripts like 00make_cowc_test.py, 00make_dota_dataset.py, and 00pure_geographic_splitter.py extract lightweight samples and preprocess raw formats for rapid pipeline debugging without altering core processing flows.
-
-VEDAI Study Pipeline (VS_*): End-to-end workflow designed for VEDAI dataset processing, including dataset separation/conversion, PerSAM feature extraction, failure analysis, and evaluation.
-
-Sensor Degradation: 02sensor_degradation.py applies realistic sensor artifacts and resolution loss to simulate non-ideal capture conditions.
-
-Dataset Exploration Tools: Interactive inspection utilities located in data_exploration/ provide bounding box visualizations, localized zooming, pipeline metrics, and DETR/YOLO format validation.
-
-🛠️ Environment Setup
-To avoid dependency conflicts and ensure all scripts execute correctly, build an isolated environment specifically for this repository.
-
-1. Clone the Repository
+On macOS (using Homebrew):
 
 Bash
+brew install miniforge
+conda init "$(basename "$SHELL")"
+(After running conda init, close and reopen your terminal window).
+
+2. Clone Repository & Setup Conda Environment
+Copy and paste these commands into your terminal to clone the code and build an isolated environment with Python 3.10:
+
+Bash
+# 1. Clone the repository and enter the folder
 git clone https://github.jpl.nasa.gov/science-team-algorithms/label-refiner.git
 cd label-refiner
 
-2. Create & Activate Environment
-Using Conda (Recommended):
-
-Bash
+# 2. Create the Conda environment
 conda create -n label-refiner python=3.10 -y
+
+# 3. Activate the environment
 conda activate label-refiner
 
-Using venv:
-
-Bash
-python3 -m venv .env
-source .env/bin/activate  # macOS/Linux
-.env\Scripts\activate     # Windows
-
-3. Install Dependencies
-Bash
+# 4. Install all required dependencies
 pip install -r requirements.txt
-⚠️ Note: If utilizing a specific hardware acceleration backend (e.g., NVIDIA CUDA or Apple Silicon MPS), verify your PyTorch and Torchvision lines in requirements.txt align with your hardware before running the installation. Use LLMs if unable to install requirements for debugging. 
-
-Data Structure
-All data must be placed in the correct folder to ensure the scripts will run correctly.
-To download data visit https://drive.google.com/drive/folders/1FTX76Ybf0PLiqdwyKsCvyi2WsF-ccoxY and download the raw DATA.
-
-data/
-    ├── VEDAI/
-    ├── COWC/
-
-In order for the data to be used it must be uncompressed.
-1. Enter the directory where to data is stored
+pip install git+https://github.com/facebookresearch/segment-anything.git
+3. Setup Reference Image Artifact
+Move the reference image (ref_car.png) into the target dataset directory where PerSAM expects to find it.
 
 Bash
+# 1. Create target dataset staging folder
+mkdir -p datasets/COWC_Points_512
+
+# 2. Move ref_car.png from the repository root into the dataset folder
+mv ref_car.png datasets/COWC_Points_512/ref_car.png
+📂 Data Setup & Extraction
+Download the raw DATA folder from the Google Drive Link and place the .zip / .tar files into the data/ directory.
+
+Run these exact commands to unpack all dataset files automatically:
+
+Bash
+# Move into the data folder
 cd data
 
-2. Unzip the COWC data and VEDAI tar files
-Bash
+# Uncompress COWC dataset
 unzip COWC.zip
+
+# Uncompress VEDAI dataset
 cd VEDAI
 tar -xvf Annotations512.tar
 cat Vehicules512.tar.* > Vehicules512.tar
 tar -xvf Vehicules512.tar
 
-3. Make sure the uncompressed data in in the correct directory 
-
+# Return back to the repository root directory
+cd ../..
 🏁 Quickstart Workflows
-Run all scripts from the Repo root Label-Refiner/ ("cd .." to move up a directory)
+⚠️ Important: Always make sure you are at the repository root (label-refiner) and your environment is active (conda activate label-refiner) before running scripts. The scripts will automatically generate the required output directories (datasets/, datasets_refined/, and processed_datasets/).
+
 Option A: VEDAI Study Pipeline
-The VEDAI Study pipeline is for validating the DINO and SAM relabeling pipeline.
-Before Running the SAM + DINO go into the dataset and make a ref_car.png and include it at the dataset root. Crop a single vehicle of your choosing to use as a reference. Crop as close to the car as possible making sure you can clearly see the border of the car in the complete image. 
-For the VEDAI dataset execution sequence, run the VS_* suite in the following order:
+Runs the end-to-end VEDAI SAM + DINOv2 relabeling and evaluation pipeline:
 
 Bash
 # 1. Separate and convert raw dataset into working format
@@ -85,43 +112,30 @@ python scripts/VS_PerSAM_DINOv2.py
 
 # 3. Evaluate overall pipeline precision/recall metrics
 python scripts/VS_evaluate_pipeline.py
-
-
-Option B: COWC Processing & Degradation Pipeline
-Follow these steps to process, refine, degrade, and lock down the standard COWC dataset:
-
-1. Geographic COWC Splitter
-Ensure your raw imagery datasets are positioned inside the data/ root directory. This is to be used to the raw COWC data only use step one if you are starting from the raw data.
+Option B: COWC Processing, PerSAM Refinement & Sensor Degradation
+Follow this sequence to process, refine, degrade, and lock down the COWC dataset:
 
 Bash
-Python scripts/00pure_geographic_splitter.py
+# 1. Tile and preprocess raw COWC aerial imagery into 512x512 patches
+python scripts/00pure_geographic_splitter.py
 
-3. Generate Refined Labels
-Execute the perSAM pipeline to refine your target dataset layout:
-Before Running the SAM + DINO go into the dataset and make a ref_car.png and include it at the dataset root. Crop a single vehicle of your choosing to use as a reference. Crop as close to the car as possible making sure you can clearly see the border of the car in the complete image. 
-
-Bash
+# 2. Extract DINOv2 feature signatures and generate PerSAM refined YOLO OBB labels
 python scripts/01cowc_persam_generate_dataset.py
-Outputs will be generated to: datasets_refined/cowc/
 
-4. Apply Sensor Degradation
-Simulate sensor noise and degradation on the refined target dataset:
-
-Bash
+# 3. Apply realistic sensor artifacts and resolution degradation
 python scripts/02sensor_degradation.py
 
-5. Purge Quality Blacklists
-Validate the generated data using the exploration tools:
-
-Bash
+# 4. Validate dataset quality using the exploration tools
 python data_exploration/val_yolo_dataset.py
 
-
-6. Zip and Export
-Compress the finalized, locked baseline package so it can be moved to your training repository:
+# 5. Compress and lock finalized package for training repo export
+zip -r dataset.zip path/to/data
+🔍 Data Exploration Tools
+Interactive inspection tools located in data_exploration/ allow you to inspect bounding box visual overlays, local crops, and format compliance:
 
 Bash
-zip -r 20260615_42_cowc_base.zip processed_datasets/20260615_42_cowc_base
+# Run interactive dataset inspector
+python data_exploration/val_yolo_dataset.py
 
 👥 Contributors
-Bridgit Graddy — Lead contributor to dataset processing, label refinement architectures, and pipeline automation development.
+Bridgit Graddy — Lead contributor to dataset processing, label refinement architectures, and pipeline automation.
