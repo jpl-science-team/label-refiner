@@ -78,7 +78,7 @@ If you do not have Conda installed, run the following commands in your terminal:
 
 On macOS (using Homebrew):
 
-Bash
+
 brew install miniforge
 conda init "$(basename "$SHELL")"
 (After running conda init, close and reopen your terminal window).
@@ -86,7 +86,7 @@ conda init "$(basename "$SHELL")"
 2. Clone Repository & Setup Conda Environment
 Copy and paste these commands into your terminal to clone the code and build an isolated environment with Python 3.10:
 
-Bash
+
 # 1. Clone the repository and enter the folder
 git clone https://github.jpl.nasa.gov/science-team-algorithms/label-refiner.git
 cd label-refiner
@@ -103,7 +103,6 @@ pip install -r requirements.txt
 # 5. Setup Reference Image Artifact
 Move the reference image (ref_car.png) into the target dataset directory where PerSAM expects to find it.
 
-Bash
 # 1. Create target dataset staging folder
 mkdir -p datasets/COWC_Points_512
 
@@ -139,7 +138,7 @@ cd ../..
 Option A: VEDAI Study Pipeline
 Runs the end-to-end VEDAI SAM + DINOv2 relabeling and evaluation pipeline:
 
-Bash
+
 # 1. Separate and convert raw dataset into working format
 ```bash
 python scripts/VS_VEDAI_Separation_Conversion.py
