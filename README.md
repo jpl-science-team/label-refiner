@@ -6,7 +6,6 @@ The primary objective is to generate clean, consistent YOLO-style Oriented Bound
 🌴 Directory Structure
 Use this file tree to check your directory setup.
 
-Plaintext
 label-refiner/
 
 ├── README.md
@@ -117,7 +116,8 @@ mv ref_car.png datasets/COWC_Points_512/ref_car.png
 ```
 
 📂 Data Setup & Extraction
-Download the raw DATA folder from the Google Drive Link and place the .zip / .tar files into the data/ directory.
+Download the COWC and VEDAI Raw data from the Google Drive Link and place the .zip / .tar files into the data/ directory. The raw data will be located under the data folder in the Google Drive
+https://drive.google.com/drive/folders/1FTX76Ybf0PLiqdwyKsCvyi2WsF-ccoxY
 
 Run these exact commands to unpack all dataset files automatically:
 # Make and move into the data folder
@@ -186,6 +186,7 @@ zip -r dataset.zip path/to/data
 Interactive inspection tools located in data_exploration/ allow you to inspect bounding box visual overlays, local crops, and format compliance:
 
 # Run interactive dataset inspector
+To use this file select the datasets_refined/COWC_512 folder. In order to change which split you are validating locate the val_yolo_dataset.py script and update the configuration. Use A and D to cycle through the images press M when an image does not meet the standards for training or validation. (The val split is most important here)
 ```bash
 python data_exploration/val_yolo_dataset.py
 ```

@@ -45,10 +45,10 @@ def build_degraded_dataset(input_dir, output_dir):
     print(f"\n=== Running Isolated Sensor Degradation Pipeline ===")
     
     for split in splits:
-        in_img_dir = input_root / "images" / split
-        in_lbl_dir = input_root / "labels" / split
-        out_img_dir = output_root / "images" / split
-        out_lbl_dir = output_root / "labels" / split
+        in_img_dir = input_root / split / "images"
+        in_lbl_dir = input_root / split / "labels" 
+        out_img_dir = output_root / split / "images" 
+        out_lbl_dir = output_root / split / "labels"
         
         if not in_img_dir.exists():
             print(f"Skipping split [{split.upper()}] - Directory not found.")
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     # ---------------------------------------------------------
     
     # Your clean dataset containing your 15GSD
-    SRC_DATASET = "datasets_refined/cowc_512"
+    SRC_DATASET = "datasets_refined/COWC_512"
     
     # The target folder where the degraded images and pristine labels will be saved
     DEGRADED_DATASET = "datasets/cowc_512_sensor_degraded"
