@@ -67,8 +67,8 @@ conda activate label-refiner
 
 # 4. Install all required dependencies
 pip install -r requirements.txt
-pip install git+https://github.com/facebookresearch/segment-anything.git
-3. Setup Reference Image Artifact
+
+# 5. Setup Reference Image Artifact
 Move the reference image (ref_car.png) into the target dataset directory where PerSAM expects to find it.
 
 Bash
@@ -77,19 +77,23 @@ mkdir -p datasets/COWC_Points_512
 
 # 2. Move ref_car.png from the repository root into the dataset folder
 mv ref_car.png datasets/COWC_Points_512/ref_car.png
+
 📂 Data Setup & Extraction
 Download the raw DATA folder from the Google Drive Link and place the .zip / .tar files into the data/ directory.
 
 Run these exact commands to unpack all dataset files automatically:
 
 Bash
-# Move into the data folder
+# Make and move into the data folder
+mkdir -p data
 cd data
 
 # Uncompress COWC dataset
 unzip COWC.zip
 
 # Uncompress VEDAI dataset
+mkdir -p VEDAI
+mv *512* VEDAI/
 cd VEDAI
 tar -xvf Annotations512.tar
 cat Vehicules512.tar.* > Vehicules512.tar
@@ -97,6 +101,7 @@ tar -xvf Vehicules512.tar
 
 # Return back to the repository root directory
 cd ../..
+
 🏁 Quickstart Workflows
 ⚠️ Important: Always make sure you are at the repository root (label-refiner) and your environment is active (conda activate label-refiner) before running scripts. The scripts will automatically generate the required output directories (datasets/, datasets_refined/, and processed_datasets/).
 
@@ -108,10 +113,14 @@ Bash
 python scripts/VS_VEDAI_Separation_Conversion.py
 
 # 2. Run SAM refinement with DINOv2 feature matching
+Before running this script, you must crop a vehicle from the dataset to use as a reference photo. Save it as ref_car.png and place it in the root directory of the VEDAI centerpoint dataset. Make sure the crop is tight around the car so its full outline is clearly visible without cutting off any edges. PerSAM's single-shot feature extraction depends heavily on the quality of this reference crop. By default, the script processes the color (RGB) dataset.
+
 python scripts/VS_PerSAM_DINOv2.py
 
 # 3. Evaluate overall pipeline precision/recall metrics
 python scripts/VS_evaluate_pipeline.py
+
+
 Option B: COWC Processing, PerSAM Refinement & Sensor Degradation
 Follow this sequence to process, refine, degrade, and lock down the COWC dataset:
 
@@ -130,6 +139,7 @@ python data_exploration/val_yolo_dataset.py
 
 # 5. Compress and lock finalized package for training repo export
 zip -r dataset.zip path/to/data
+
 🔍 Data Exploration Tools
 Interactive inspection tools located in data_exploration/ allow you to inspect bounding box visual overlays, local crops, and format compliance:
 
