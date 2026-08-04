@@ -8,7 +8,9 @@ Use this file tree to check your directory setup.
 
 Plaintext
 label-refiner/
+
 ├── README.md
+
 ├── requirements.txt
 ├── ref_car.png                     <-- Reference vehicle crop placed here initially
 ├── models/
