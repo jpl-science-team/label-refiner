@@ -1,10 +1,14 @@
+# About
 Label Refiner & Small Object Detection Tools
 This repository provides an automated pipeline for preparing, exploring, and refining small-object datasets—specifically targeting COWC variants, VEDAI, and other aerial imagery sources.
 
 The primary objective is to generate clean, consistent YOLO-style Oriented Bounding Box (OBB) labels by leveraging the Segment Anything Model (SAM) and Personalized SAM (PerSAM) for bounding box refinement.
 
-This repo is still under development. Option A (VEDAI study) is in progress, but Option B (COWC Processing) is set up and runs on a Mac.
- 
+# Status
+
+*This repo is still under development. Option A (VEDAI study) is in progress, but Option B (COWC Processing) is set up and runs on a Mac.*
+
+# Directory
 
 🌴 Directory Structure
 Use this file tree to check your directory setup.
