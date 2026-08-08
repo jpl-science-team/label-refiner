@@ -70,6 +70,8 @@ label-refiner/
 
 🛠️ Complete Beginner's Setup Guide
 
+Note that these instructions are for running on a mac.
+
 If you have never used Conda or Terminal before, follow these step-by-step commands in order.
 
 1. Install Miniforge3 (Conda Environment Manager)
