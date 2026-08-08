@@ -3,6 +3,9 @@ This repository provides an automated pipeline for preparing, exploring, and ref
 
 The primary objective is to generate clean, consistent YOLO-style Oriented Bounding Box (OBB) labels by leveraging the Segment Anything Model (SAM) and Personalized SAM (PerSAM) for bounding box refinement.
 
+This repo is still under development. Option A (VEDAI study) is in progress, but Option B (COWC Processing) is set up and runs on a Mac.
+ 
+
 🌴 Directory Structure
 Use this file tree to check your directory setup.
 
@@ -87,32 +90,35 @@ conda init "$(basename "$SHELL")"
 2. Clone Repository & Setup Conda Environment
 Copy and paste these commands into your terminal to clone the code and build an isolated environment with Python 3.10:
 
+# Clone the repo and set up the environment
 
-# 1. Clone the repository and enter the folder
+## 1. Clone the repository and enter the folder
 ```bash
 git clone https://github.jpl.nasa.gov/science-team-algorithms/label-refiner.git
 cd label-refiner
 ```
-# 2. Create the Conda environment
+## 2. Create the Conda environment
 ```bash
 conda create -n label-refiner python=3.10 -y
 ```
-# 3. Activate the environment
+## 3. Activate the environment
 ```bash
 conda activate label-refiner
 ```
-# 4. Install all required dependencies
+## 4. Install all required dependencies
 ```bash
 pip install -r requirements.txt
 ```
-# 5. Setup Reference Image Artifact
+## 5. Setup Reference Image Artifact
 Move the reference image (ref_car.png) into the target dataset directory where PerSAM expects to find it.
 
-# 1. Create target dataset staging folder
+# Get the datasets
+
+## 1. Create target dataset staging folder
 ```bash
 mkdir -p datasets/COWC_Points_512
 ```
-# 2. Move ref_car.png from the repository root into the dataset folder
+## 2. Move ref_car.png from the repository root into the dataset folder
 ```bash
 mv ref_car.png datasets/COWC_Points_512/ref_car.png
 ```
@@ -122,7 +128,7 @@ Download the COWC and VEDAI Raw data from the Google Drive Link and place the .z
 https://drive.google.com/drive/folders/1FTX76Ybf0PLiqdwyKsCvyi2WsF-ccoxY
 
 Run these exact commands to unpack all dataset files automatically:
-# Make and move into the data folder
+## Make and move into the data folder
 ```bash
 mkdir -p data
 cd data
@@ -144,44 +150,45 @@ cd ../..
 🏁 Quickstart Workflows
 ⚠️ Important: Always make sure you are at the repository root (label-refiner) and your environment is active (conda activate label-refiner) before running scripts. The scripts will automatically generate the required output directories (datasets/, datasets_refined/, and processed_datasets/).
 
-Option A: VEDAI Study Pipeline
+# Option A: VEDAI Study Pipeline
+
 Runs the end-to-end VEDAI SAM + DINOv2 relabeling and evaluation pipeline:
 
 
-# 1. Separate and convert raw dataset into working format
+## 1. Separate and convert raw dataset into working format
 ```bash
 python scripts/VS_VEDAI_Separation_Conversion.py
 ```
-# 2. Run SAM refinement with DINOv2 feature matching
+## 2. Run SAM refinement with DINOv2 feature matching
 Before running this script, you must crop a vehicle from the dataset to use as a reference photo. Save it as ref_car.png and place it in the root directory of the VEDAI centerpoint dataset. Make sure the crop is tight around the car so its full outline is clearly visible without cutting off any edges. PerSAM's single-shot feature extraction depends heavily on the quality of this reference crop. By default, the script processes the color (RGB) dataset.
 ```bash
 python scripts/VS_PerSAM_DINOv2.py
 ```
-# 3. Evaluate overall pipeline precision/recall metrics
+## 3. Evaluate overall pipeline precision/recall metrics
 ```bash
 python scripts/VS_evaluate_pipeline.py
 ```
 
-Option B: COWC Processing, PerSAM Refinement & Sensor Degradation
+# Option B: COWC Processing, PerSAM Refinement & Sensor Degradation
 Follow this sequence to process, refine, degrade, and lock down the COWC dataset:
 
-# 1. Tile and preprocess raw COWC aerial imagery into 512x512 patches
+## 1. Tile and preprocess raw COWC aerial imagery into 512x512 patches
 ```bash
 python scripts/00pure_geographic_splitter.py
 ```
-# 2. Extract DINOv2 feature signatures and generate PerSAM refined YOLO OBB labels
+## 2. Extract DINOv2 feature signatures and generate PerSAM refined YOLO OBB labels
 ```bash
 python scripts/01cowc_persam_generate_dataset.py
 ```
-# 3. Apply realistic sensor artifacts and resolution degradation
+## 3. Apply realistic sensor artifacts and resolution degradation
 ```bash
 python scripts/02sensor_degradation.py
 ```
-# 4. Validate dataset quality using the exploration tools
+## 4. Validate dataset quality using the exploration tools
 ```bash
 python data_exploration/val_yolo_dataset.py
 ```
-# 5. Compress and lock finalized package for training repo export
+## 5. Compress and lock finalized package for training repo export
 zip -r dataset.zip path/to/data
 
 🔍 Data Exploration Tools
