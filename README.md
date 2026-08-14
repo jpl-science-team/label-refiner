@@ -92,25 +92,52 @@ If you do not have Conda installed, run the following commands in your terminal:
 
 On macOS (using Homebrew):
 
-
+```bash
 brew install miniforge
 conda init "$(basename "$SHELL")"
-(After running conda init, close and reopen your terminal window).
+#(After running conda init, close and reopen your terminal window).
+```
+
+For linux, you'll have to download and install in your environment.
 
 2. Clone Repository & Setup Conda Environment
 Copy and paste these commands into your terminal to clone the code and build an isolated environment with Python 3.10:
 
 # Clone the repo and set up the environment
 
+## 0. Make sure you have git lfs
+
+This repo uses lfs, so make sure you have it installed and initialized:
+
+```bash
+# for mac
+brew install git-lfs
+# for linux, you'll have to download: https://github.com/git-lfs/git-lfs?utm_source=gitlfs_site&utm_medium=installation_link&utm_campaign=gitlfs#installing
+
+# next initialize:
+git lfs install 
+```
+
 ## 1. Clone the repository and enter the folder
+
 ```bash
 git clone https://github.jpl.nasa.gov/science-team-algorithms/label-refiner.git
 cd label-refiner
 ```
 ## 2. Create the Conda environment
+
 ```bash
 conda create -n label-refiner python=3.10 -y
 ```
+
+If you run into anaconda errors (license not supported), you'll want to make sure you use only conda-forge (no defaults or anaconda) in your channels, and your .condarc file should look something like:
+
+ssl_verify: true
+channels:
+  - conda-forge
+env_prompt: ({name})
+channel_priority: strict
+ 
 ## 3. Activate the environment
 ```bash
 conda activate label-refiner
@@ -144,6 +171,7 @@ mkdir -p data
 cd data
 
 # Uncompress COWC dataset
+# On the Google Drive, the COWC.zip file is in the COWC_RAW folder
 unzip COWC.zip
 
 # Uncompress VEDAI dataset
