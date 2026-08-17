@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from pathlib import Path
 from tqdm import tqdm
 from segment_anything import sam_model_registry, SamPredictor
+import pdb
 
 # ---------------------------------------------------------
 # 1. PerSAM Visual Weights Extractor
@@ -164,12 +165,13 @@ def load_sam(model_path="models/sam_vit_b.pth"):
     print(f"Loading SAM checkpoint from: {model_path}")
     sam = sam_model_registry["vit_b"](checkpoint=model_path)
 
-    if torch.backends.mps.is_available():
-        device = "mps"
-    elif torch.cuda.is_available():
-        device = "cuda"
-    else:
-        device = "cpu"
+#    if torch.backends.mps.is_available():
+#        device = "mps"
+#    elif torch.cuda.is_available():
+#        device = "cuda"
+#    else:
+#        device = "cpu"
+    device = "cpu"        
         
     sam.to(device)
     predictor = SamPredictor(sam)
@@ -336,6 +338,7 @@ if __name__ == "__main__":
     ref_mask_file = Path("datasets/COWC_Points_512/ref_mask.png")
     
     if ref_image_file.exists() and not ref_mask_file.exists():
+#        pdb.set_trace()
         temp_img = cv2.imread(str(ref_image_file), cv2.IMREAD_GRAYSCALE)
         _, generated_mask = cv2.threshold(temp_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         cv2.imwrite(str(ref_mask_file), generated_mask)
