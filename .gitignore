@@ -1,3 +1,6 @@
+*dataset*
+*.pth
+
 *.DS_Store
 
 # Byte-compiled / optimized / DLL files
@@ -181,3 +184,8 @@ cython_debug/
 data/
 datasets/
 test_data/
+
+# DINOv2 code and weights (download separately; see README)
+models/dinov2-main/
+models/dinov2-main.zip
+models/dinov2_vits14_pretrain.pth

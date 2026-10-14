@@ -214,10 +214,11 @@ Follow this sequence to process, refine, degrade, and lock down the COWC dataset
 ```bash
 python scripts/00pure_geographic_splitter.py
 ```
-## 2. Extract DINOv2 feature signatures and generate PerSAM refined YOLO OBB labels
+## 2. Extract SAM feature signatures and generate PerSAM refined YOLO OBB labels
 ```bash
 python scripts/01cowc_persam_generate_dataset.py
 ```
+The PerSAM reference is `datasets/COWC_Points_512/ref_car.png`. It is automatically shrunk back to native resolution if it was upscaled, and the car is segmented with SAM. If no `ref_car.png` is found, a reference is built from the labeled image with the most cars. See "Refining a small dataset and viewing the plots" below for all options.
 ## 3. Apply realistic sensor artifacts and resolution degradation
 ```bash
 python scripts/02sensor_degradation.py
@@ -229,6 +230,115 @@ python data_exploration/val_yolo_dataset.py
 ## 5. Compress and lock finalized package for training repo export
 zip -r dataset.zip path/to/data
 
+# Refining a small dataset and viewing the plots
+
+Use this to try the PerSAM refinement on a small folder (e.g. `mini_dataset/`) and check the results visually. Run everything from the repository root.
+
+## 1. Activate the environment
+```bash
+cd label-refiner
+conda activate label-refiner
+```
+
+## 2. Prepare the input folder
+The input can be a flat folder or one with splits. The output copies the same layout.
+```
+mini_dataset/                      or     my_dataset/
+├── images/   (*.png / *.jpg)             ├── train/{images,labels}/
+└── labels/   (same names, .txt)          ├── val/{images,labels}/
+                                          └── test/{images,labels}/
+```
+Labels are YOLO point labels, one car per line: `class cx cy w h` (normalized 0–1). The `w h` box is only used as a fallback when SAM's mask is rejected.
+
+## 3. Refine the labels
+```bash
+python scripts/01cowc_persam_generate_dataset.py --input mini_dataset --output mini_dataset_refined \
+    --ref datasets/COWC_Points_512/ref_car.png
+```
+This takes about 3 s per image on CPU.
+
+The reference car image (`--ref`) should be a tight crop of one car from the same kind of imagery. If it was enlarged (e.g. a 30 px car saved at 300 px), the script detects this and shrinks it back so the car is the same size as in the dataset, then segments the car with SAM. Without `--ref`, the script uses `<input>/ref_car.png` if it exists, otherwise it builds the reference from the labeled image with the most cars. The output folder contains:
+- `images/`, `labels/`: copied images and refined YOLO OBB labels (`class x1 y1 x2 y2 x3 y3 x4 y4`)
+- `refinement_report.csv`: one row per box, with how it was made (`source`), its similarity to the reference, and whether it was flagged
+  - `sam`: SAM mask accepted
+  - `corrected`: replaced by the geometric correction head (size and angle copied from a nearby car)
+  - `fallback`: SAM mask rejected, the original placeholder box was kept
+  - `similarity`: how car-like the label point looks compared with the reference; `background_similarity`: the image's median similarity; `contrast`: the difference
+  - `low_similarity = 1`: contrast below `--sim-margin`, i.e. the point looks little more car-like than the background. Worth checking by eye (often cars cut off by the image edge or in shadow); it is a review hint, not a reliable bad-label detector
+- `reference_mask.png`: the reference as SAM saw it, with the car(s) used for the PerSAM signature outlined in green. Check this first if the flags look wrong
+- `data.yaml`: only for the train/val/test layout
+
+Useful options:
+| Option | Effect |
+|---|---|
+| `--ref PATH` | Reference car crop (default: `<input>/ref_car.png` if present) |
+| `--ref-scale 0.1` | Override the automatic resize of the crop (e.g. if the car mask in `reference_mask.png` is the wrong size) |
+| `--ref-mask PATH` | Use your own car mask for the crop instead of SAM's |
+| `--ref-tile PATH` | Build the reference from this labeled image instead of a crop (default when no crop: the input image with the most labels) |
+| `--sim-margin 0.10` | Flag boxes whose contrast is below this (default 0.10) |
+| `--drop-low-sim` | Leave flagged boxes out of the label files (they stay in the report) |
+| `--snap` | Move each prompt to the most car-like point within 8 px of the label |
+| `--negative` | Add a negative prompt at the least car-like point in the image |
+| `--box-prompt` | Prompt SAM with a 36 px box around each car plus a ring of negative points just outside it (as in `VS_PerSAM_DINOv2.py`). Stops masks bleeding into neighbouring cars and shadows |
+| `--features dino` | Use DINOv2 instead of SAM features for the similarity map (needs the DINOv2 files below) |
+
+`--snap` and `--negative` are off by default because they reduced the number of accepted SAM masks on the COWC mini dataset. They may help for data with less accurate point labels.
+
+Results on the mini dataset (65 cars; "sam" = box from an accepted SAM mask):
+| Run | sam | corrected | fallback |
+|---|---|---|---|
+| default | 24 | 18 | 23 |
+| `--box-prompt` | 54 | 2 | 9 |
+| `--features dino --box-prompt --snap` (tile reference) | 55 | 3 | 7 |
+
+With `--box-prompt`, many boxes are exactly 36 px long (the box size), so long cars may be clipped. Check the plots.
+
+**DINOv2 and the reference:** DINOv2 only works well with a reference *tile* (a real dataset image), not a hand-cropped car. On the mini dataset, the `ref_car.png` crop gave DINOv2 almost no car-vs-background contrast, because DINOv2 features depend on the car's surroundings. When using `--features dino`, leave out `--ref` (and make sure there's no `ref_car.png` in the input folder) or pass `--ref-tile`.
+
+Size thresholds in the script are in pixels and tuned for COWC (cars about 30 px long), including `BOX_HALF_SIZE` for `--box-prompt`. For data at a different resolution, adjust the pixel constants in `scripts/01cowc_persam_generate_dataset.py`.
+
+### DINOv2 files (only for `--features dino`)
+The script loads DINOv2 from local files, so no internet access is needed when it runs. These files are in `.gitignore`, so download them yourself:
+1. Download the repository as a ZIP from https://github.com/facebookresearch/dinov2 (Code → Download ZIP) and unzip it to `models/dinov2-main/`
+2. Download the ViT-S/14 weights (~85 MB) from https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_pretrain.pth into `models/`
+
+If your machine can't reach those sites, download them on another computer and copy them over (e.g. `scp file user@host:~/label-refiner/models/`).
+
+## 4. Draw the boxes over the images
+```bash
+python data_exploration/plot_obb_labels.py \
+    --images mini_dataset_refined/images --labels mini_dataset_refined/labels \
+    --input-labels mini_dataset/labels --out mini_dataset_refined/plots
+```
+Colors: green = SAM mask accepted, cyan = correction head, orange = fallback, magenta X = low similarity (flagged), blue dot = snapped prompt, red dot = original point label.
+
+## 5. Build a side-by-side comparison page
+Pass one `--run NAME=FOLDER` per refined output folder (each needs `plots/` from step 4). They are shown left to right.
+```bash
+python data_exploration/compare_plots_html.py \
+    --run "original=mini_dataset_refined_original" \
+    --run "default=mini_dataset_refined" \
+    --out mini_compare.html
+```
+
+## 6. View the page from a remote machine (no download needed)
+On the remote machine, start a web server bound to localhost only, inside `tmux` so it keeps running after you log out:
+```bash
+tmux new -d -s plots 'cd ~/label-refiner && conda run -n label-refiner python -m http.server 8765 --bind 127.0.0.1'
+```
+It takes about 10 seconds to start. Stop it with `tmux kill-session -t plots`.
+
+On your own computer, forward port 8765 over SSH:
+- **Windows (PowerShell / OpenSSH)**: add to `%USERPROFILE%\.ssh\config` (no `.txt` extension):
+  ```
+  Host analysis.jpl.nasa.gov
+      LocalForward 8765 localhost:8765
+  ```
+- **PuTTY**: Connection → SSH → Tunnels, Source port `8765`, Destination `localhost:8765`, click **Add**, then save the session.
+- **Mac/Linux**: `ssh -N -L 8765:localhost:8765 <user>@<host>`
+
+Then open http://localhost:8765/mini_compare.html in your browser. The page reloads by itself whenever it is regenerated (step 5), so you can leave the tab open between runs.
+
 🔍 Data Exploration Tools
 Interactive inspection tools located in data_exploration/ allow you to inspect bounding box visual overlays, local crops, and format compliance:
 
@@ -238,4 +348,6 @@ To use this file select the datasets_refined/COWC_512 folder. In order to change
 python data_exploration/val_yolo_dataset.py
 ```
 👥 Contributors
-Bridgit Graddy — Lead contributor to dataset processing, label refinement architectures, and pipeline automation.
+* Bridgit Graddy — Lead contributor to dataset processing, label refinement architectures, and pipeline automation.
+* Emily Dunkel
+* Mike Burl
