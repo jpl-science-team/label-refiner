@@ -167,14 +167,20 @@ cd data
 
 # Uncompress COWC dataset
 # On the Google Drive, the COWC.zip file is in the COWC_RAW folder
+# See: https://drive.google.com/drive/folders/1VMFEMDJFNktTk5jbTBxdbuE9ii9rSwxf
+
 unzip COWC.zip
+```
 
 # Uncompress VEDAI dataset
-mkdir -p VEDAI
-mv *512* VEDAI/
-cd VEDAI
-tar -xvf Annotations512.tar
-cat Vehicules512.tar.* > Vehicules512.tar
+
+Grab VEDAI_RAW from Google Drive: https://drive.google.com/drive/folders/1VMFEMDJFNktTk5jbTBxdbuE9ii9rSwxf
+
+```bash
+mv VEDAI_RAW VEDAI
+cd VEDAO
+tar -xvf VEDAI_512_Annotations.tar
+cat VEDAI_Vehicules512.tar.* > Vehicules512.tar
 tar -xvf Vehicules512.tar
 
 # Return back to the repository root directory
