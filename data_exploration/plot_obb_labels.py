@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Batch renderer that draws YOLO OBB labels over their images and saves PNGs.
-If refinement_report.csv (written by 01cowc_persam_generate_dataset.py) sits next to the
+If refinement_report.csv (written by refine_labels.py) sits next to the
 labels folder, boxes are colored by how they were produced:
 - Green   : SAM mask accepted
 - Cyan    : replaced by the geometric correction head (size/angle borrowed from a nearby car)

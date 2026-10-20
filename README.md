@@ -10,10 +10,6 @@ This repository provides an automated pipeline for preparing, exploring, and ref
 
 The primary objective is to generate clean, consistent YOLO-style Oriented Bounding Box (OBB) labels by leveraging the Segment Anything Model (SAM) and Personalized SAM (PerSAM) for bounding box refinement.
 
-# Status
-
-*This repo is still under development. Option A (VEDAI study) is in progress, but Option B (COWC Processing) is set up and runs on a Mac.*
-
 # Directory
 
 🌴 Directory Structure
@@ -67,7 +63,8 @@ label-refiner/
 
 │   ├── 00pure_geographic_splitter.py
 
-│   ├── 01cowc_persam_generate_dataset.py
+│   ├── 01cowc_persam_generate_dataset.py   <-- older Option B script
+│   ├── refine_labels.py                    <-- Option 0
 
 │   ├── 02sensor_degradation.py
 
@@ -82,8 +79,6 @@ label-refiner/
     └── val_yolo_dataset.py
 
 🛠️ Complete Beginner's Setup Guide
-
-Note that these instructions are for running on a mac.
 
 If you have never used Conda or Terminal before, follow these step-by-step commands in order.
 
@@ -188,59 +183,14 @@ cd ../..
 🏁 Quickstart Workflows
 ⚠️ Important: Always make sure you are at the repository root (label-refiner) and your environment is active (conda activate label-refiner) before running scripts. The scripts will automatically generate the required output directories (datasets/, datasets_refined/, and processed_datasets/).
 
-# Option A: VEDAI Study Pipeline
+# Option 0: Run on any dataset
 
-Runs the end-to-end VEDAI SAM + DINOv2 relabeling and evaluation pipeline:
+Includes options for including a reference image, DINOv2 similarity scoare, box prompting, and snap.
 
+## 1. Set up data
 
-## 1. Separate and convert raw dataset into working format
-```bash
-python scripts/VS_VEDAI_Separation_Conversion.py
-```
-## 2. Run SAM refinement with DINOv2 feature matching
-Before running this script, you must crop a vehicle from the dataset to use as a reference photo. Save it as ref_car.png and place it in the root directory of the VEDAI centerpoint dataset. Make sure the crop is tight around the car so its full outline is clearly visible without cutting off any edges. PerSAM's single-shot feature extraction depends heavily on the quality of this reference crop. By default, the script processes the color (RGB) dataset.
-```bash
-python scripts/VS_PerSAM_DINOv2.py
-```
-## 3. Evaluate overall pipeline precision/recall metrics
-```bash
-python scripts/VS_evaluate_pipeline.py
-```
+Set up a data folder with /images and /labels in COWC format. The labels are generated using point level annotations and generic box size. You can use the python scripts/00pure_geographic_splitter.py for COWC data.
 
-# Option B: COWC Processing, PerSAM Refinement & Sensor Degradation
-Follow this sequence to process, refine, degrade, and lock down the COWC dataset:
-
-## 1. Tile and preprocess raw COWC aerial imagery into 512x512 patches
-```bash
-python scripts/00pure_geographic_splitter.py
-```
-## 2. Extract SAM feature signatures and generate PerSAM refined YOLO OBB labels
-```bash
-python scripts/01cowc_persam_generate_dataset.py
-```
-The PerSAM reference is `datasets/COWC_Points_512/ref_car.png`. It is automatically shrunk back to native resolution if it was upscaled, and the car is segmented with SAM. If no `ref_car.png` is found, a reference is built from the labeled image with the most cars. See "Refining a small dataset and viewing the plots" below for all options.
-## 3. Apply realistic sensor artifacts and resolution degradation
-```bash
-python scripts/02sensor_degradation.py
-```
-## 4. Validate dataset quality using the exploration tools
-```bash
-python data_exploration/val_yolo_dataset.py
-```
-## 5. Compress and lock finalized package for training repo export
-zip -r dataset.zip path/to/data
-
-# Refining a small dataset and viewing the plots
-
-Use this to try the PerSAM refinement on a small folder (e.g. `mini_dataset/`) and check the results visually. Run everything from the repository root.
-
-## 1. Activate the environment
-```bash
-cd label-refiner
-conda activate label-refiner
-```
-
-## 2. Prepare the input folder
 The input can be a flat folder or one with splits. The output copies the same layout.
 ```
 mini_dataset/                      or     my_dataset/
@@ -248,11 +198,13 @@ mini_dataset/                      or     my_dataset/
 └── labels/   (same names, .txt)          ├── val/{images,labels}/
                                           └── test/{images,labels}/
 ```
+
 Labels are YOLO point labels, one car per line: `class cx cy w h` (normalized 0–1). The `w h` box is only used as a fallback when SAM's mask is rejected.
 
-## 3. Refine the labels
+## 2. Generage refined YOLO OBB labels
+
 ```bash
-python scripts/01cowc_persam_generate_dataset.py --input mini_dataset --output mini_dataset_refined \
+python scripts/refine_labels.py --input mini_dataset --output mini_dataset_refined \
     --ref datasets/COWC_Points_512/ref_car.png
 ```
 This takes about 3 s per image on CPU.
@@ -284,6 +236,7 @@ Useful options:
 
 `--snap` and `--negative` are off by default because they reduced the number of accepted SAM masks on the COWC mini dataset. They may help for data with less accurate point labels.
 
+
 Results on the mini dataset (65 cars; "sam" = box from an accepted SAM mask):
 | Run | sam | corrected | fallback |
 |---|---|---|---|
@@ -295,16 +248,16 @@ With `--box-prompt`, many boxes are exactly 36 px long (the box size), so long c
 
 **DINOv2 and the reference:** DINOv2 only works well with a reference *tile* (a real dataset image), not a hand-cropped car. On the mini dataset, the `ref_car.png` crop gave DINOv2 almost no car-vs-background contrast, because DINOv2 features depend on the car's surroundings. When using `--features dino`, leave out `--ref` (and make sure there's no `ref_car.png` in the input folder) or pass `--ref-tile`.
 
-Size thresholds in the script are in pixels and tuned for COWC (cars about 30 px long), including `BOX_HALF_SIZE` for `--box-prompt`. For data at a different resolution, adjust the pixel constants in `scripts/01cowc_persam_generate_dataset.py`.
+Size thresholds in the script are in pixels and tuned for COWC (cars about 30 px long), including `BOX_HALF_SIZE` for `--box-prompt`. For data at a different resolution, adjust the pixel constants in `scripts/refine_labels.py`.
 
 ### DINOv2 files (only for `--features dino`)
 The script loads DINOv2 from local files, so no internet access is needed when it runs. These files are in `.gitignore`, so download them yourself:
 1. Download the repository as a ZIP from https://github.com/facebookresearch/dinov2 (Code → Download ZIP) and unzip it to `models/dinov2-main/`
 2. Download the ViT-S/14 weights (~85 MB) from https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_pretrain.pth into `models/`
 
-If your machine can't reach those sites, download them on another computer and copy them over (e.g. `scp file user@host:~/label-refiner/models/`).
+I've also put those files on Google Drive here: https://drive.google.com/drive/folders/1FTX76Ybf0PLiqdwyKsCvyi2WsF-ccoxY
 
-## 4. Draw the boxes over the images
+## 3. Draw the boxes over the images
 ```bash
 python data_exploration/plot_obb_labels.py \
     --images mini_dataset_refined/images --labels mini_dataset_refined/labels \
@@ -312,7 +265,7 @@ python data_exploration/plot_obb_labels.py \
 ```
 Colors: green = SAM mask accepted, cyan = correction head, orange = fallback, magenta X = low similarity (flagged), blue dot = snapped prompt, red dot = original point label.
 
-## 5. Build a side-by-side comparison page
+## 4. Build a side-by-side comparison page
 Pass one `--run NAME=FOLDER` per refined output folder (each needs `plots/` from step 4). They are shown left to right.
 ```bash
 python data_exploration/compare_plots_html.py \
@@ -321,7 +274,7 @@ python data_exploration/compare_plots_html.py \
     --out mini_compare.html
 ```
 
-## 6. View the page from a remote machine (no download needed)
+## 5. Optional (if on remote machine): View the page from a remote machine (no download needed)
 On the remote machine, start a web server bound to localhost only, inside `tmux` so it keeps running after you log out:
 ```bash
 tmux new -d -s plots 'cd ~/label-refiner && conda run -n label-refiner python -m http.server 8765 --bind 127.0.0.1'
@@ -338,6 +291,50 @@ On your own computer, forward port 8765 over SSH:
 - **Mac/Linux**: `ssh -N -L 8765:localhost:8765 <user>@<host>`
 
 Then open http://localhost:8765/mini_compare.html in your browser. The page reloads by itself whenever it is regenerated (step 5), so you can leave the tab open between runs.
+
+
+# Option A: VEDAI Study Pipeline
+
+Runs the end-to-end VEDAI SAM + DINOv2 relabeling and evaluation pipeline. This option is not complete yet.
+
+
+## 1. Separate and convert raw dataset into working format
+```bash
+python scripts/VS_VEDAI_Separation_Conversion.py
+```
+## 2. Run SAM refinement with DINOv2 feature matching
+Before running this script, you must crop a vehicle from the dataset to use as a reference photo. Save it as ref_car.png and place it in the root directory of the VEDAI centerpoint dataset. Make sure the crop is tight around the car so its full outline is clearly visible without cutting off any edges. PerSAM's single-shot feature extraction depends heavily on the quality of this reference crop. By default, the script processes the color (RGB) dataset.
+```bash
+python scripts/VS_PerSAM_DINOv2.py
+```
+## 3. Evaluate overall pipeline precision/recall metrics
+```bash
+python scripts/VS_evaluate_pipeline.py
+```
+
+# Option B: COWC Processing, PerSAM Refinement & Sensor Degradation
+Follow this sequence to process, refine, degrade, and lock down the COWC dataset:
+
+## 1. Tile and preprocess raw COWC aerial imagery into 512x512 patches
+```bash
+python scripts/00pure_geographic_splitter.py
+```
+## 2. Extract SAM feature signatures and generate PerSAM refined YOLO OBB labels
+```bash
+python scripts/01cowc_persam_generate_dataset.py
+```
+This older script has no CLI options and reads `datasets/` and the reference `datasets/COWC_Points_512/ref_car.png` (with an Otsu-thresholded mask) from hardcoded paths. For reference handling, DINOv2, box prompting and the report CSV, use `scripts/refine_labels.py` (see "Option 0" above).
+## 3. Apply realistic sensor artifacts and resolution degradation
+```bash
+python scripts/02sensor_degradation.py
+```
+## 4. Validate dataset quality using the exploration tools
+```bash
+python data_exploration/val_yolo_dataset.py
+```
+## 5. Compress and lock finalized package for training repo export
+zip -r dataset.zip path/to/data
+
 
 🔍 Data Exploration Tools
 Interactive inspection tools located in data_exploration/ allow you to inspect bounding box visual overlays, local crops, and format compliance:
