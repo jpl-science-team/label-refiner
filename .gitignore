@@ -205,4 +205,14 @@ VEDAI_mini_jitter4/*
 VEDAI_tune_jitter4/*
 !VEDAI_tune_jitter4/sweep_summary.txt
 VEDAI_tune_jitter4_sweep.log
+VEDAI_*_sweep.log
 VEDAI_jitter_overnight.log
+VEDAI_holdout/*
+!VEDAI_holdout/sweep_summary.txt
+VEDAI_holdout_jitter4/*
+!VEDAI_holdout_jitter4/sweep_summary.txt
+VEDAI_tune_jitterL3W1/*
+!VEDAI_tune_jitterL3W1/sweep_summary.txt
+VEDAI_tune_jitterL3W1_sweep.log
+VEDAI_holdout_jitterL3W1/*
+!VEDAI_holdout_jitterL3W1/sweep_summary.txt

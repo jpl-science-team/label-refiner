@@ -28,6 +28,14 @@ DINO_WEIGHTS = "models/dinov2_vits14_pretrain.pth"  # from dl.fbaipublicfiles.co
 DINO_UPSCALE = 2            # DINOv2 uses 14px patches; upscaling 512 -> 1024 gives ~7px resolution for ~30px cars
 USE_BOX_PROMPT = False      # VS_PerSAM_DINOv2-style prompt: a box + ring of negative points around each car
 BOX_HALF_SIZE = 18          # box prompt half-width (px); negative points sit just outside it
+CENTER_ON_POINT = False     # move each SAM box so it is centered on its label point (for exact center-point labels)
+PICK_MASK = None            # None (SAM's single mask), "sam" (best of SAM's 3 by its score) or "sim" (by similarity contrast)
+PICK_RING = 3               # "sim": width (px) of the ring around a candidate mask that should look like background
+TWO_PASS = False            # also prompt with the point alone and take the length from that mask (see two_pass_box)
+GROW_LENGTH = 0.0           # add this many px to each SAM box's length (SAM masks tend to miss the car's ends)
+TWO_PASS_MAX_LENGTH = 48    # two-pass: a point mask longer than this (px) has bled into a neighbour; keep the box mask
+TWO_PASS_MIN_ASPECT = 1.5   # two-pass: a box mask squarer than this has no clear direction; use the point mask's angle
+CORRECT_AXIS_ALIGNED = True # correction head replaces exactly horizontal/vertical boxes (shadow bleeds on COWC)
 CAR_LENGTH = 30             # typical car length (px) in the dataset being refined
 BASE_CAR_LENGTH = 30        # car length the pixel thresholds were tuned at (COWC)
 
@@ -196,6 +204,13 @@ def mask_to_yolo_obb(mask, img_w, img_h):
         bl[0] / img_w, bl[1] / img_h
     ]
 
+def adjust_sam_box(yolo_obb, label_x, label_y, img_w, img_h):
+    """Applies CENTER_ON_POINT and GROW_LENGTH to a box from mask_to_yolo_obb (same corner order)."""
+    (cx, cy), (length, width), angle = obb_rect(yolo_obb, img_w, img_h)
+    if CENTER_ON_POINT:
+        cx, cy = label_x, label_y
+    return rect_to_obb(((cx, cy), (length + px(GROW_LENGTH), width), angle), img_w, img_h)
+
 # ---------------------------------------------------------
 # 3. Post-Processing Geometric Correction Head
 # ---------------------------------------------------------
@@ -237,7 +252,7 @@ def geometric_correction_head(refined_labels, img_w, img_h):
         (cx, cy), (w, h), angle = rect
         max_dim = max(w, h)
         
-        is_bad_box = max_dim > px(45) or max_dim < px(8) or angle == 0.0 or angle == 90.0
+        is_bad_box = max_dim > px(45) or max_dim < px(8) or (CORRECT_AXIS_ALIGNED and angle in (0.0, 90.0))
 
         if is_bad_box:
             if len(valid_cars) > 0:
@@ -296,6 +311,95 @@ def load_sam(model_path="models/sam_vit_b.pth"):
 # ---------------------------------------------------------
 # 5. Per-Folder Refinement (one images/ + labels/ pair)
 # ---------------------------------------------------------
+def pick_by_similarity(masks, similarity_map):
+    """Index of the mask whose inside looks most like the reference car compared with a thin ring
+    just outside it. A mask that covers only part of a car (roof, windshield) has car around it,
+    so its ring is car-like too and it scores lower than the whole-car mask."""
+    r = max(1, int(round(px(PICK_RING))))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    scores = []
+    for m in masks:
+        m8 = m.astype(np.uint8)
+        ring = (cv2.dilate(m8, kernel) > 0) & ~m
+        scores.append(similarity_map[m].mean() - similarity_map[ring].mean() if m.any() and ring.any() else -np.inf)
+    return int(np.argmax(scores))
+
+def sam_mask(predictor, x, y, box=None, neg_point=None, similarity_map=None):
+    """SAM mask for a car at (x, y). Without a box: the point plus 4 nudged points. With a box
+    (x1, y1, x2, y2), as in VS_PerSAM_DINOv2.py: the point, the box, and a ring of negatives 1 px
+    outside the box so the mask can't bleed into neighbours or shadows. With PICK_MASK set, SAM
+    returns 3 candidate masks and the best one that passes mask_to_yolo_obb's checks is used."""
+    if box is not None:
+        x1, y1, x2, y2 = box
+        rx1, ry1, rx2, ry2 = x1 - 1, y1 - 1, x2 + 1, y2 + 1
+        input_points = np.array([
+            [x, y],
+            [rx1, y], [rx2, y], [x, ry1], [x, ry2],
+            [rx1, ry1], [rx2, ry1], [rx1, ry2], [rx2, ry2]
+        ])
+        input_labels = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0])
+        input_box = np.array([[x1, y1, x2, y2]])
+    else:
+        nudge = px(4)
+        input_points = np.array([[x, y], [x - nudge, y], [x + nudge, y], [x, y - nudge], [x, y + nudge]])
+        input_labels = np.array([1, 1, 1, 1, 1])
+        input_box = None
+
+    if neg_point is not None:
+        input_points = np.vstack([input_points, neg_point])
+        input_labels = np.append(input_labels, 0)
+
+    masks, scores, _ = predictor.predict(point_coords=input_points, point_labels=input_labels,
+                                         box=input_box, multimask_output=PICK_MASK is not None)
+    if PICK_MASK is None:
+        return masks[0]
+    h, w = masks.shape[-2:]
+    valid = [i for i in range(len(masks)) if mask_to_yolo_obb(masks[i], w, h) is not None]
+    if not valid:
+        return masks[int(np.argmax(scores))]
+    if PICK_MASK == "sim":
+        return masks[valid[pick_by_similarity(masks[valid], similarity_map)]]
+    return masks[max(valid, key=lambda i: scores[i])]
+
+def obb_rect(yolo_obb, img_w, img_h):
+    """((cx, cy), (length, width), angle) of a normalized 8-value OBB, long side first."""
+    pts = np.array(yolo_obb, dtype=np.float32).reshape(4, 2) * np.array([img_w, img_h], dtype=np.float32)
+    (cx, cy), (w, h), angle = cv2.minAreaRect(pts)
+    return ((cx, cy), (w, h), angle) if w >= h else ((cx, cy), (h, w), angle + 90.0)
+
+def rect_to_obb(rect, img_w, img_h):
+    """Normalized 8-value OBB (tl, tr, br, bl, as in mask_to_yolo_obb) from a cv2 rotated rect."""
+    box = cv2.boxPoints(rect)
+    x_sorted = box[np.argsort(box[:, 0]), :]
+    tl, bl = x_sorted[:2][np.argsort(x_sorted[:2, 1])]
+    tr, br = x_sorted[2:][np.argsort(x_sorted[2:, 1])]
+    return [tl[0] / img_w, tl[1] / img_h, tr[0] / img_w, tr[1] / img_h,
+            br[0] / img_w, br[1] / img_h, bl[0] / img_w, bl[1] / img_h]
+
+def two_pass_box(predictor, x, y, neg_point, img_w, img_h, similarity_map=None):
+    """
+    Point prompts get the car's length right but come out too wide (shadows); the fixed square
+    box prompt gets the width right but cuts long cars short. So prompt both ways and keep the box
+    mask's center, width and angle with the point mask's length. If one mask is rejected by
+    mask_to_yolo_obb, the other is used on its own. Two exceptions: a point mask longer than
+    TWO_PASS_MAX_LENGTH has bled into a neighbour or shadow, so the box mask is kept as is; and a
+    nearly square box mask (only part of the car) says nothing about direction, so the point
+    mask's center and angle are used with the box mask's width.
+    """
+    half = px(BOX_HALF_SIZE)
+    point_obb = mask_to_yolo_obb(sam_mask(predictor, x, y, None, neg_point, similarity_map), img_w, img_h)
+    box_obb = mask_to_yolo_obb(sam_mask(predictor, x, y, (x - half, y - half, x + half, y + half), neg_point,
+                                        similarity_map), img_w, img_h)
+    if point_obb is None or box_obb is None:
+        return box_obb if box_obb is not None else point_obb
+    (cx, cy), (box_length, width), angle = obb_rect(box_obb, img_w, img_h)
+    point_center, (length, _), point_angle = obb_rect(point_obb, img_w, img_h)
+    if length > px(TWO_PASS_MAX_LENGTH):
+        return box_obb
+    if box_length / width < TWO_PASS_MIN_ASPECT:
+        (cx, cy), angle = point_center, point_angle
+    return rect_to_obb(((cx, cy), (max(length, width), width), angle), img_w, img_h)
+
 def refine_folder(in_dir, out_dir, predictor, target_weight, dino=None, desc="Processing"):
     """
     Refines every image in in_dir/images using its point labels in in_dir/labels,
@@ -366,43 +470,14 @@ def refine_folder(in_dir, out_dir, predictor, target_weight, dino=None, desc="Pr
             prompts.append((x, y))
             similarities.append(float(similarity_map[min(y, img_h - 1), min(x, img_w - 1)]))
 
-            input_box = None
-            if USE_BOX_PROMPT:
-                # As in VS_PerSAM_DINOv2.py: one positive at the car, a box around it, and a ring of
-                # negatives just outside the box so the mask can't bleed into neighbours or shadows
-                half = px(BOX_HALF_SIZE)
-                r = half + 1
-                input_points = np.array([
-                    [x, y],
-                    [x - r, y], [x + r, y], [x, y - r], [x, y + r],
-                    [x - r, y - r], [x + r, y - r], [x - r, y + r], [x + r, y + r]
-                ])
-                input_labels = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0])
-                input_box = np.array([[x - half, y - half, x + half, y + half]])
+            if not TWO_PASS:
+                box = None
+                if USE_BOX_PROMPT:
+                    half = px(BOX_HALF_SIZE)
+                    box = (x - half, y - half, x + half, y + half)
+                yolo_obb = mask_to_yolo_obb(sam_mask(predictor, x, y, box, neg_point, similarity_map), img_w, img_h)
             else:
-                nudge = px(4)
-                input_points = np.array([
-                    [x, y],
-                    [x - nudge, y],
-                    [x + nudge, y],
-                    [x, y - nudge],
-                    [x, y + nudge]
-                ])
-                input_labels = np.array([1, 1, 1, 1, 1])
-
-            if neg_point is not None:
-                input_points = np.vstack([input_points, neg_point])
-                input_labels = np.append(input_labels, 0)
-
-            masks, scores, _ = predictor.predict(
-                point_coords=input_points,
-                point_labels=input_labels,
-                box=input_box,
-                multimask_output=False
-            )
-
-            mask = masks[0]
-            yolo_obb = mask_to_yolo_obb(mask, img_w, img_h)
+                yolo_obb = two_pass_box(predictor, x, y, neg_point, img_w, img_h, similarity_map)
             sources.append("sam" if yolo_obb is not None else "fallback")
 
             if yolo_obb is None:
@@ -413,6 +488,8 @@ def refine_folder(in_dir, out_dir, predictor, target_weight, dino=None, desc="Pr
                 y2_n = cy + (h / 2.0)
 
                 yolo_obb = [x1_n, y1_n, x2_n, y1_n, x2_n, y2_n, x1_n, y2_n]
+            elif CENTER_ON_POINT or GROW_LENGTH:
+                yolo_obb = adjust_sam_box(yolo_obb, cx * img_w, cy * img_h, img_w, img_h)
 
             refined_labels.append([int(cls_id)] + yolo_obb)
 
@@ -499,6 +576,8 @@ def build_reference_from_tile(predictor, img, points):
     PerSAM-style reference: segments every labeled car in one tile with SAM and returns
     the union of the masks that pass the OBB size/aspect checks. Using a tile from the
     dataset keeps the reference at the same scale and imaging conditions as the targets.
+    Only the largest piece of each mask is kept (stray blobs next to the car are dropped),
+    and cars whose mask touches the image edge are skipped (cut-off outlines).
     """
     img_h, img_w = img.shape[:2]
     predictor.set_image(img)
@@ -510,12 +589,16 @@ def build_reference_from_tile(predictor, img, points):
         contours, _ = cv2.findContours(masks[0].astype("uint8"), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
-        _, (w, h), _ = cv2.minAreaRect(max(contours, key=cv2.contourArea))
+        cnt = max(contours, key=cv2.contourArea)
+        bx, by, bw, bh = cv2.boundingRect(cnt)
+        if bx == 0 or by == 0 or bx + bw >= img_w or by + bh >= img_h:
+            continue
+        _, (w, h), _ = cv2.minAreaRect(cnt)
         aspect = max(w, h) / (min(w, h) + 1e-6)
         # Same single-car criteria as the correction head's "valid car" check, so merged
         # blobs of several cars + shadow don't leak asphalt into the signature
         if px(15) < max(w, h) < px(42) and 1.3 < aspect < 3.2:
-            ref_mask[masks[0]] = 255
+            cv2.drawContours(ref_mask, [cnt], -1, 255, cv2.FILLED)
             used += 1
     if used == 0:
         raise RuntimeError("No usable car masks in the reference tile; pick another with --ref-tile")
@@ -665,6 +748,19 @@ if __name__ == "__main__":
                              f"COWC; use 20 for VEDAI 512)")
     parser.add_argument("--box-half-size", type=float, default=None,
                         help=f"Box prompt half-width in px (default {BOX_HALF_SIZE} scaled by --car-length)")
+    parser.add_argument("--center-on-point", action="store_true",
+                        help="Center each SAM box on its label point (use when labels are exact box centers)")
+    parser.add_argument("--grow-length", type=float, default=None,
+                        help="Add this many px to each SAM box's length (default 0)")
+    parser.add_argument("--two-pass", action="store_true",
+                        help="Prompt SAM with the box and with the point alone; keep the box mask's width, "
+                             "center and angle and the point mask's length (uses --box-half-size)")
+    parser.add_argument("--keep-axis-aligned", action="store_true",
+                        help="Don't let the correction head replace exactly horizontal/vertical boxes "
+                             "(on VEDAI many cars are parked that way; on COWC such boxes were mostly shadow bleeds)")
+    parser.add_argument("--pick-mask", choices=["sam", "sim"], default=None,
+                        help="Ask SAM for 3 candidate masks and keep the best: sam = SAM's own score, "
+                             "sim = most car-like inside vs. a ring around it (similarity map; DINOv2 with --features dino)")
     args = parser.parse_args()
 
     USE_NEGATIVE_POINT = USE_NEGATIVE_POINT or args.negative
@@ -676,8 +772,19 @@ if __name__ == "__main__":
     if args.box_half_size is not None:
         # px() scales BOX_HALF_SIZE again when it is used, so store the unscaled equivalent
         BOX_HALF_SIZE = args.box_half_size * BASE_CAR_LENGTH / CAR_LENGTH
+    CENTER_ON_POINT = CENTER_ON_POINT or args.center_on_point
+    TWO_PASS = TWO_PASS or args.two_pass
+    PICK_MASK = PICK_MASK or args.pick_mask
+    CORRECT_AXIS_ALIGNED = CORRECT_AXIS_ALIGNED and not args.keep_axis_aligned
+    if args.grow_length is not None:
+        GROW_LENGTH = args.grow_length * BASE_CAR_LENGTH / CAR_LENGTH  # unscaled, as for BOX_HALF_SIZE
     print(f"Car length {CAR_LENGTH:g}px: pixel thresholds scaled x{CAR_LENGTH / BASE_CAR_LENGTH:.3g}"
-          + (f", box prompt {2 * px(BOX_HALF_SIZE):.0f}px" if USE_BOX_PROMPT else ""))
+          + (f", box prompt {2 * px(BOX_HALF_SIZE):.0f}px" if USE_BOX_PROMPT or TWO_PASS else "")
+          + (", two-pass (point-mask length)" if TWO_PASS else "")
+          + (f", mask picked by {PICK_MASK}" if PICK_MASK else "")
+          + ("" if CORRECT_AXIS_ALIGNED else ", axis-aligned boxes kept")
+          + (", SAM boxes centered on label points" if CENTER_ON_POINT else "")
+          + (f", SAM boxes +{px(GROW_LENGTH):g}px long" if GROW_LENGTH else ""))
 
     sam_predictor, dev_env = load_sam(args.model)
     dino_extractor = DINOv2FeatureExtractor(device=dev_env) if args.features == "dino" else None
