@@ -1,0 +1,8 @@
+VEDAI_holdout_jitterL3W1: 239 vehicles, sorted by mean IoU
+run              meanIoU  median  >=0.5  >=0.7   dLen   dWid  angle   sam/corr/fallback/unmatched
+-------------------------------------------------------------------------------------------------
+box_h7_hybrid_center_keepaxis   0.681   0.692    93%    46%   +0.1   +0.0    2.7   235/4/0/0
+box_h7_center      0.644   0.659    88%    36%   -2.2   +0.0    2.7   232/2/5/0
+box_h7_hybrid_keepaxis   0.597   0.607    82%    17%   +0.1   +0.0    2.7   235/3/0/1
+box_h7             0.578   0.590    75%    16%   -2.2   +0.0    2.7   232/1/5/1
+default            0.548   0.578    73%    12%   +0.2   +1.5    2.2   221/11/4/3
