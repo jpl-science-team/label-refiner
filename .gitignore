@@ -1,3 +1,6 @@
+*dataset*
+*.pth
+
 *.DS_Store
 
 # Byte-compiled / optimized / DLL files
@@ -181,3 +184,35 @@ cython_debug/
 data/
 datasets/
 test_data/
+
+# DINOv2 code and weights (download separately; see README)
+models/dinov2-main/
+models/dinov2-main.zip
+models/dinov2_vits14_pretrain.pth
+
+# Mini test sets: only image_list.txt (and sweep_summary.txt) are tracked; the rest is regenerated
+# (images/labels via make_cowc_subset.py / make_vedai_subset.py, pages via summarize_vedai_sweep.py)
+COWC_mini_test/*
+!COWC_mini_test/image_list.txt
+VEDAI_mini_test/*
+VEDAI_tune/*
+!VEDAI_mini_test/image_list.txt
+!VEDAI_mini_test/sweep_summary.txt
+!VEDAI_tune/sweep_summary.txt
+VEDAI_tune_sweep.log
+VEDAI_mini_jitter4/*
+!VEDAI_mini_jitter4/sweep_summary.txt
+VEDAI_tune_jitter4/*
+!VEDAI_tune_jitter4/sweep_summary.txt
+VEDAI_tune_jitter4_sweep.log
+VEDAI_*_sweep.log
+VEDAI_jitter_overnight.log
+VEDAI_holdout/*
+!VEDAI_holdout/sweep_summary.txt
+VEDAI_holdout_jitter4/*
+!VEDAI_holdout_jitter4/sweep_summary.txt
+VEDAI_tune_jitterL3W1/*
+!VEDAI_tune_jitterL3W1/sweep_summary.txt
+VEDAI_tune_jitterL3W1_sweep.log
+VEDAI_holdout_jitterL3W1/*
+!VEDAI_holdout_jitterL3W1/sweep_summary.txt
