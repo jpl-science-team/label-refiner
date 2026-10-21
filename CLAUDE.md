@@ -9,7 +9,7 @@ Pipeline for refining small-object (vehicle) labels on aerial imagery (COWC, VED
 ## Setup
 
 - Python 3.10 in a conda env (conda-forge channel only): `conda create -n label-refiner python=3.10 -y && conda activate label-refiner && pip install -r requirements.txt`
-- Git LFS is required (`.gitattributes` tracks `*.pth` and `datasets_refined/**` only; pngs elsewhere, e.g. in `COWC_mini_test/` plots, would go into plain git). Run `git lfs install` before cloning/pulling.
+- The repo doesn't use Git LFS (removed 2026-10-20; no LFS files were tracked). Model weights (`*.pth`) are git-ignored, so don't commit large binaries.
 - `.gitignore` ignores `data/`, `datasets/` and anything matching `*dataset*` (so every `mini_dataset*` folder). The mini test sets are reproduced from checked-in lists instead: `COWC_mini_test/image_list.txt` (`scripts/make_cowc_subset.py`) and `VEDAI_mini_test/image_list.txt` (`scripts/make_vedai_subset.py`).
 - Raw data (`data/COWC`, `data/VEDAI`) is not in the repo; it is downloaded from a Google Drive link in README.md and unpacked per the README's commands.
 - `Personalize-SAM/` is a vendored copy of the PerSAM project (own README/requirements); the `scripts/` code imports `segment_anything` (pip package), not `per_segment_anything`.

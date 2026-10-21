@@ -119,19 +119,6 @@ Copy and paste these commands into your terminal to clone the code and build an 
 
 # Clone the repo and set up the environment
 
-## 0. Make sure you have git lfs
-
-This repo uses lfs, so make sure you have it installed and initialized:
-
-```bash
-# for mac
-brew install git-lfs
-# for linux, you'll have to download: https://github.com/git-lfs/git-lfs?utm_source=gitlfs_site&utm_medium=installation_link&utm_campaign=gitlfs#installing
-
-# next initialize:
-git lfs install 
-```
-
 ## 1. Clone the repository and enter the folder
 
 ```bash
