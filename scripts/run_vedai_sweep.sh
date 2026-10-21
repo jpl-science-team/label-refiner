@@ -38,7 +38,6 @@ elif [ "$SWEEP" = jitter ]; then
     "box_h7|--box-prompt --box-half-size 7"
     "box_h7_snap|--box-prompt --box-half-size 7 --snap"
     "box_h7_dino_snap|--box-prompt --box-half-size 7 --features dino --snap"
-    "box_h8_snap|--box-prompt --box-half-size 8 --snap"
   )
 else
   echo "Unknown SWEEP=$SWEEP (use boxsize or jitter)"; exit 1

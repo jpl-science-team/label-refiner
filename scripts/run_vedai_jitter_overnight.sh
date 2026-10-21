@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Overnight jitter study on the whole VEDAI tune split (1,125 images). Builds two sets
 # (exact center points, and points moved up to 4 px), then runs the jitter sweep on both
-# at the same time (~7.5 h on 32 CPUs). Run from the repo root inside tmux:
+# at the same time (~13 h on 32 CPUs: about 2.3 h per setting, 3.3 h for DINOv2). Run from the repo root inside tmux:
 #   tmux new -d -s sweep 'cd ~/label-refiner && conda run -n label-refiner bash scripts/run_vedai_jitter_overnight.sh > VEDAI_jitter_overnight.log 2>&1'
 # Restarting skips finished runs. Afterwards:
 #   V=VEDAI_tune python scripts/summarize_vedai_sweep.py

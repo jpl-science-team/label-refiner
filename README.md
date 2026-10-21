@@ -345,7 +345,7 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
    ```
    To keep it running after you log out, start it in tmux: `tmux new -d -s sweep 'cd ~/label-refiner && conda run -n label-refiner bash -c "V=VEDAI_tune bash scripts/run_vedai_sweep.sh" > VEDAI_tune_sweep.log 2>&1'`.
 
-   **Jitter study (sloppy point labels).** VEDAI's points are the exact centers of the true boxes, which real hand-clicked labels aren't. `make_vedai_subset.py --jitter 4` moves every input point by up to 4 px in a random direction (fixed seed), leaving the truth unchanged. `SWEEP=jitter` runs the settings that matter for off-center points (point prompt and box prompt, each with and without `--snap`, plus snap with DINOv2 features). `scripts/run_vedai_jitter_overnight.sh` builds the exact-point and the jittered tune sets and runs the jitter sweep on both at once (about 7.5 hours):
+   **Jitter study (sloppy point labels).** VEDAI's points are the exact centers of the true boxes, which real hand-clicked labels aren't. `make_vedai_subset.py --jitter 4` moves every input point by up to 4 px in a random direction (fixed seed), leaving the truth unchanged. `SWEEP=jitter` runs the settings that matter for off-center points (point prompt and box prompt, each with and without `--snap`, plus snap with DINOv2 features). `scripts/run_vedai_jitter_overnight.sh` builds the exact-point and the jittered tune sets and runs the jitter sweep on both at once (about 13 hours):
    ```bash
    tmux new -d -s sweep 'cd ~/label-refiner && conda run -n label-refiner bash scripts/run_vedai_jitter_overnight.sh > VEDAI_jitter_overnight.log 2>&1'
    ```
