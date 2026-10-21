@@ -335,7 +335,7 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
    bash scripts/run_vedai_sweep.sh
    python scripts/summarize_vedai_sweep.py
    ```
-   The sweep runs `refine_labels.py` with `--car-length 21` for each setting listed at the top of `scripts/run_vedai_sweep.sh` (default, box prompt, and box half-sizes 5–14 px; snap, the negative point and DINOv2 were dropped after they lowered IoU on the check set), scores each run and draws its plots. Finished runs are skipped, so an interrupted sweep can be restarted. The summary writes `VEDAI_mini_test/sweep_summary.txt` (one row per setting, sorted by mean IoU) and `VEDAI_mini_test/mini_compare.html` (the true boxes, then each run from best to worst; view it as in step 5 above). Set `PY=/path/to/python` if `python` isn't the label-refiner env.
+   The sweep runs `refine_labels.py` with `--car-length 21` for each setting listed at the top of `scripts/run_vedai_sweep.sh` (default, box prompt, and box half-sizes 6–14 px; snap, the negative point and DINOv2 were dropped after they lowered IoU on the check set), scores each run and draws its plots. Finished runs are skipped, so an interrupted sweep can be restarted. The summary writes `VEDAI_mini_test/sweep_summary.txt` (one row per setting, sorted by mean IoU) and `VEDAI_mini_test/mini_compare.html` (the true boxes, then each run from best to worst; view it as in step 5 above). Set `PY=/path/to/python` if `python` isn't the label-refiner env.
 
 4. **Overnight: the whole tune split.** Build a subset with every tune image and run the same sweep on it (about an hour per setting):
    ```bash
@@ -344,6 +344,12 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
    V=VEDAI_tune python scripts/summarize_vedai_sweep.py
    ```
    To keep it running after you log out, start it in tmux: `tmux new -d -s sweep 'cd ~/label-refiner && conda run -n label-refiner bash -c "V=VEDAI_tune bash scripts/run_vedai_sweep.sh" > VEDAI_tune_sweep.log 2>&1'`.
+
+   **Jitter study (sloppy point labels).** VEDAI's points are the exact centers of the true boxes, which real hand-clicked labels aren't. `make_vedai_subset.py --jitter 4` moves every input point by up to 4 px in a random direction (fixed seed), leaving the truth unchanged. `SWEEP=jitter` runs the settings that matter for off-center points (point prompt and box prompt, each with and without `--snap`, plus snap with DINOv2 features). `scripts/run_vedai_jitter_overnight.sh` builds the exact-point and the jittered tune sets and runs the jitter sweep on both at once (about 7.5 hours):
+   ```bash
+   tmux new -d -s sweep 'cd ~/label-refiner && conda run -n label-refiner bash scripts/run_vedai_jitter_overnight.sh > VEDAI_jitter_overnight.log 2>&1'
+   ```
+   It writes `VEDAI_tune/sweep_summary.txt` and `VEDAI_tune_jitter4/sweep_summary.txt`. Comparing the two shows how much IoU off-center points cost and how much `--snap` wins back. For a 15-minute check first, build `VEDAI_mini_jitter4` with `--list VEDAI_mini_test/image_list.txt --jitter 4` and run `SWEEP=jitter` on it and on `VEDAI_mini_test`.
 
 5. **Check the chosen settings on the holdout**, once:
    ```bash

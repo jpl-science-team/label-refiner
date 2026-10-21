@@ -200,3 +200,9 @@ VEDAI_tune/*
 !VEDAI_mini_test/sweep_summary.txt
 !VEDAI_tune/sweep_summary.txt
 VEDAI_tune_sweep.log
+VEDAI_mini_jitter4/*
+!VEDAI_mini_jitter4/sweep_summary.txt
+VEDAI_tune_jitter4/*
+!VEDAI_tune_jitter4/sweep_summary.txt
+VEDAI_tune_jitter4_sweep.log
+VEDAI_jitter_overnight.log

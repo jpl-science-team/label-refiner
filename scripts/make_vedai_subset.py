@@ -11,19 +11,42 @@ VS_VEDAI_Separation_Conversion.py:
 Images come from the tune split only (never VEDAI's foldNNtest.txt holdout). Either pass
 --list to rebuild an exact set, or --n-with/--n-empty/--seed to sample one.
 
+VEDAI's points are the exact centers of the true boxes. --jitter R moves each input point by
+a random offset of up to R px (uniform over a disc, fixed by --jitter-seed) to simulate
+hand-clicked labels; the truth labels are left unchanged.
+
 Examples:
   # The 12-image check set used for the ~12 min sweep (list is checked in)
   python scripts/make_vedai_subset.py --out VEDAI_mini_test --list VEDAI_mini_test/image_list.txt
   # The whole tune split, for an overnight sweep
   python scripts/make_vedai_subset.py --out VEDAI_tune --all
+  # The same with points moved up to 4 px off center
+  python scripts/make_vedai_subset.py --out VEDAI_tune_jitter4 --all --jitter 4
 """
 
 import argparse
+import math
 import random
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+IMG_SIZE = 512.0  # VEDAI 512 tiles; labels are normalized to this
+
+def jitter_labels(text, radius, rng):
+    """Moves each point label (class cx cy w h, normalized) up to `radius` px, staying inside the image."""
+    lines = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        r = radius * math.sqrt(rng.random())  # sqrt: uniform over the disc, not bunched at the center
+        theta = rng.uniform(0, 2 * math.pi)
+        cx = min(max(float(parts[1]) + r * math.cos(theta) / IMG_SIZE, 0.0), 1.0)
+        cy = min(max(float(parts[2]) + r * math.sin(theta) / IMG_SIZE, 0.0), 1.0)
+        lines.append(f"{parts[0]} {cx:.6f} {cy:.6f} {' '.join(parts[3:])}\n")
+    return "".join(lines)
 
 def main():
     parser = argparse.ArgumentParser(description="Build a VEDAI subset with center-point input and truth labels.")
@@ -37,6 +60,9 @@ def main():
     parser.add_argument("--n-with", type=int, default=11, help="Images with vehicles to sample (default 11)")
     parser.add_argument("--n-empty", type=int, default=1, help="Images without vehicles to sample (default 1)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--jitter", type=float, default=0.0,
+                        help="Move each input point by up to this many px (default 0: exact centers)")
+    parser.add_argument("--jitter-seed", type=int, default=0)
     args = parser.parse_args()
 
     src, truth, out = Path(args.src), Path(args.truth), Path(args.out)
@@ -59,10 +85,14 @@ def main():
     for d in ("mini_dataset/images", "mini_dataset/labels", "truth/labels"):
         (out / d).mkdir(parents=True, exist_ok=True)
     n_vehicles = 0
+    jitter_rng = random.Random(args.jitter_seed)
     for s in stems:
         img = next((src / "images").glob(f"{s}.*"))
         shutil.copy(img, out / "mini_dataset/images" / img.name)
-        shutil.copy(src / "labels" / f"{s}.txt", out / "mini_dataset/labels" / f"{s}.txt")
+        points = (src / "labels" / f"{s}.txt").read_text()
+        if args.jitter > 0:
+            points = jitter_labels(points, args.jitter, jitter_rng)
+        (out / "mini_dataset/labels" / f"{s}.txt").write_text(points)
         shutil.copy(truth / f"{s}.txt", out / "truth/labels" / f"{s}.txt")
         n_vehicles += len((truth / f"{s}.txt").read_text().splitlines())
     if not args.list or Path(args.list).resolve() != (out / "image_list.txt").resolve():
@@ -72,7 +102,8 @@ def main():
                     "--images", str(out / "mini_dataset/images"), "--labels", str(out / "truth/labels"),
                     "--input-labels", str(out / "mini_dataset/labels"), "--out", str(out / "truth/plots")],
                    check=True, stdout=subprocess.DEVNULL)
-    print(f"{out}: {len(stems)} images, {n_vehicles} vehicles (holdout fold{args.fold:02d} excluded)")
+    print(f"{out}: {len(stems)} images, {n_vehicles} vehicles (holdout fold{args.fold:02d} excluded)"
+          + (f", points jittered up to {args.jitter:g} px (seed {args.jitter_seed})" if args.jitter > 0 else ""))
 
 if __name__ == "__main__":
     main()
