@@ -9,12 +9,12 @@ and flagged count if RUN_DIR/refinement_report.csv exists, otherwise total / axi
 
 Example:
     python data_exploration/compare_plots_html.py \
-        --run original=mini_dataset_refined_original --run current=mini_dataset_refined \
-        --out mini_compare.html
+        --run original=COWC_mini_test/mini_dataset_refined_original --run current=COWC_mini_test/mini_dataset_refined \
+        --out COWC_mini_test/mini_compare.html
 
 View over SSH (from the repo root):
     python -m http.server 8765 --bind 127.0.0.1
-    then open http://localhost:8765/mini_compare.html through an SSH tunnel.
+    then open http://localhost:8765/COWC_mini_test/mini_compare.html through an SSH tunnel.
     The page polls itself and reloads whenever it is regenerated, so it can stay open.
 """
 

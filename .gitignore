@@ -189,3 +189,14 @@ test_data/
 models/dinov2-main/
 models/dinov2-main.zip
 models/dinov2_vits14_pretrain.pth
+
+# Mini test sets: only image_list.txt (and sweep_summary.txt) are tracked; the rest is regenerated
+# (images/labels via make_cowc_subset.py / make_vedai_subset.py, pages via summarize_vedai_sweep.py)
+COWC_mini_test/*
+!COWC_mini_test/image_list.txt
+VEDAI_mini_test/*
+VEDAI_tune/*
+!VEDAI_mini_test/image_list.txt
+!VEDAI_mini_test/sweep_summary.txt
+!VEDAI_tune/sweep_summary.txt
+VEDAI_tune_sweep.log

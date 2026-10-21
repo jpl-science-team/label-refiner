@@ -6,6 +6,11 @@ import cv2
 import numpy as np
 from pathlib import Path
 
+# Placeholder box (px) written with each center point: median OBB of the kept classes
+# (car, van, pickup) is 21 x 9 px
+FALLBACK_BOX_W = 21.0
+FALLBACK_BOX_H = 9.0
+
 def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_vehicle_class=True, apply_strict_geom_filter=False):
     src_img_dir = Path(src_img_dir)
     src_anno_dir = Path(src_anno_dir)
@@ -65,10 +70,11 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
                 
                 # =========================================================
                 # 1. SEMANTIC FILTER
-                # Standard VEDAI Road Vehicles: 1=Car, 2=Pickup, 4=Truck, 9=Van
-                # Add 5=Semi, 7=Tractor, 8=Camping Car if you want all ground vehicles.
+                # VEDAI classes: 1=Car, 2=Truck, 4=Tractor, 5=Camping Car, 7=Motorcycle,
+                # 8=Bus, 9=Van, 10=Other, 11=Pickup, 23=Boat, 31=Plane.
+                # Only car-sized vehicles are kept: car, van, pickup.
                 # =========================================================
-                road_vehicles = {1, 2, 4, 5, 7, 8, 9}
+                road_vehicles = {1, 9, 11}
                 if orig_class not in road_vehicles:
                     total_vehicles_dropped_semantic += 1
                     continue
@@ -117,9 +123,11 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
                 )
                 
                 # Centerpoints Format (x_center, y_center, dummy_w, dummy_h)
+                # The dummy box is the median VEDAI car size; refine_labels.py uses it as the fallback box
                 x_center = max(0.0, min(1.0, float(parts[0]) / img_w))
                 y_center = max(0.0, min(1.0, float(parts[1]) / img_h))
-                center_lines.append(f"{class_id} {x_center:.6f} {y_center:.6f} 0.005000 0.005000\n")
+                center_lines.append(f"{class_id} {x_center:.6f} {y_center:.6f} "
+                                    f"{FALLBACK_BOX_W / img_w:.6f} {FALLBACK_BOX_H / img_h:.6f}\n")
                 
         # Save output image-annotation pairs
         # Color (CO) Outputs
@@ -149,7 +157,7 @@ def process_vedai_dataset(src_img_dir, src_anno_dir, output_base_dir, map_to_veh
     print(f"Datasets generated under: {output_base_dir.resolve()}")
 
 if __name__ == "__main__":
-    RAW_VEDAI_IMAGES = "data/VEDAI/Vehicules512" 
+    RAW_VEDAI_IMAGES = "data/VEDAI/Vehicules512"
     RAW_VEDAI_ANNOTATIONS = "data/VEDAI/Annotations512"
     OUTPUT_STUDY_DIR = "datasets/vedai_512"
     MAP_TO_SINGLE_VEHICLE = True

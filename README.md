@@ -64,17 +64,36 @@ label-refiner/
 │   ├── 00pure_geographic_splitter.py
 
 │   ├── 01cowc_persam_generate_dataset.py   <-- older Option B script
+
 │   ├── refine_labels.py                    <-- Option 0
+
+│   ├── evaluate_updated_vedai_labels.py    <-- Option 0: score against VEDAI truth
+
+│   ├── make_cowc_subset.py                 <-- Option 0: rebuild the COWC mini dataset
+
+│   ├── make_vedai_subset.py                <-- Option 0: build VEDAI test sets
+
+│   ├── run_vedai_sweep.sh                  <-- Option 0: parameter sweep
+
+│   ├── summarize_vedai_sweep.py            <-- Option 0: sweep table + comparison page
 
 │   ├── 02sensor_degradation.py
 
-│   ├── VS_VEDAI_Separation_Conversion.py
+│   ├── VS_VEDAI_Separation_Conversion.py   <-- also prepares VEDAI for Option 0
 
-│   ├── VS_PerSAM_DINOv2.py
+│   ├── VS_PerSAM_DINOv2.py                 <-- superseded by Option 0
 
-│   └── VS_evaluate_pipeline.py
+│   └── VS_evaluate_pipeline.py             <-- superseded by Option 0
+
+├── COWC_mini_test/                 <-- COWC mini dataset and refinement runs (image_list.txt; rebuild with make_cowc_subset.py)
+
+├── VEDAI_mini_test/                <-- VEDAI quick-check set (image_list.txt; rebuild with make_vedai_subset.py)
 
 └── data_exploration/               <-- Inspection and validation tools
+
+    ├── plot_obb_labels.py
+
+    ├── compare_plots_html.py
 
     └── val_yolo_dataset.py
 
@@ -191,15 +210,15 @@ cd ../..
 
 # Option 0: Run on any dataset
 
-Includes options for including a reference image, DINOv2 similarity scoare, box prompting, and snap.
+Includes options for including a reference image, DINOv2 similarity scoare, box prompting, and snap. This is the main refinement path; it replaces the refinement steps of Options A and B. To score settings against true labels, see "Tuning on VEDAI" at the end of this section.
 
 ## 1. Set up data
 
-Set up a data folder with /images and /labels in COWC format. The labels are generated using point level annotations and generic box size. You can use the python scripts/00pure_geographic_splitter.py for COWC data.
+Set up a data folder with /images and /labels in COWC format. The labels are generated using point level annotations and generic box size. You can use the python scripts/00pure_geographic_splitter.py for COWC data, or `scripts/VS_VEDAI_Separation_Conversion.py` for VEDAI (see "Tuning on VEDAI" below).
 
 The input can be a flat folder or one with splits. The output copies the same layout.
 ```
-mini_dataset/                      or     my_dataset/
+COWC_mini_test/mini_dataset/       or     my_dataset/
 ├── images/   (*.png / *.jpg)             ├── train/{images,labels}/
 └── labels/   (same names, .txt)          ├── val/{images,labels}/
                                           └── test/{images,labels}/
@@ -207,10 +226,15 @@ mini_dataset/                      or     my_dataset/
 
 Labels are YOLO point labels, one car per line: `class cx cy w h` (normalized 0–1). The `w h` box is only used as a fallback when SAM's mask is rejected.
 
+The COWC mini dataset used in the examples below (11 tiles, 65 cars, from the COWC test split) isn't in git, because folders named `*dataset*` are ignored. Rebuild it from the checked-in list after running `00pure_geographic_splitter.py`:
+```bash
+python scripts/make_cowc_subset.py    # reads COWC_mini_test/image_list.txt, writes COWC_mini_test/mini_dataset/
+```
+
 ## 2. Generage refined YOLO OBB labels
 
 ```bash
-python scripts/refine_labels.py --input mini_dataset --output mini_dataset_refined \
+python scripts/refine_labels.py --input COWC_mini_test/mini_dataset --output COWC_mini_test/mini_dataset_refined \
     --ref datasets/COWC_Points_512/ref_car.png
 ```
 This takes about 3 s per image on CPU.
@@ -229,15 +253,17 @@ The reference car image (`--ref`) should be a tight crop of one car from the sam
 Useful options:
 | Option | Effect |
 |---|---|
+| `--car-length 30` | Typical car length in pixels (default 30, COWC). All pixel thresholds scale with it; use 20 for VEDAI 512 |
 | `--ref PATH` | Reference car crop (default: `<input>/ref_car.png` if present) |
 | `--ref-scale 0.1` | Override the automatic resize of the crop (e.g. if the car mask in `reference_mask.png` is the wrong size) |
 | `--ref-mask PATH` | Use your own car mask for the crop instead of SAM's |
 | `--ref-tile PATH` | Build the reference from this labeled image instead of a crop (default when no crop: the input image with the most labels) |
 | `--sim-margin 0.10` | Flag boxes whose contrast is below this (default 0.10) |
 | `--drop-low-sim` | Leave flagged boxes out of the label files (they stay in the report) |
-| `--snap` | Move each prompt to the most car-like point within 8 px of the label |
+| `--snap` | Move each prompt to the most car-like point within 8 px of the label (scaled by `--car-length`) |
 | `--negative` | Add a negative prompt at the least car-like point in the image |
-| `--box-prompt` | Prompt SAM with a 36 px box around each car plus a ring of negative points just outside it (as in `VS_PerSAM_DINOv2.py`). Stops masks bleeding into neighbouring cars and shadows |
+| `--box-prompt` | Prompt SAM with a box around each car (36 px at the default car length, i.e. 1.2 × `--car-length`) plus a ring of negative points just outside it (as in `VS_PerSAM_DINOv2.py`). Stops masks bleeding into neighbouring cars and shadows |
+| `--box-half-size 18` | Set the box prompt half-width in pixels directly instead of scaling it from `--car-length` |
 | `--features dino` | Use DINOv2 instead of SAM features for the similarity map (needs the DINOv2 files below) |
 
 `--snap` and `--negative` are off by default because they reduced the number of accepted SAM masks on the COWC mini dataset. They may help for data with less accurate point labels.
@@ -250,11 +276,11 @@ Results on the mini dataset (65 cars; "sam" = box from an accepted SAM mask):
 | `--box-prompt` | 54 | 2 | 9 |
 | `--features dino --box-prompt --snap` (tile reference) | 55 | 3 | 7 |
 
-With `--box-prompt`, many boxes are exactly 36 px long (the box size), so long cars may be clipped. Check the plots.
+With `--box-prompt`, many boxes are exactly the box size (36 px at the default car length), so long cars may be clipped. Check the plots.
 
 **DINOv2 and the reference:** DINOv2 only works well with a reference *tile* (a real dataset image), not a hand-cropped car. On the mini dataset, the `ref_car.png` crop gave DINOv2 almost no car-vs-background contrast, because DINOv2 features depend on the car's surroundings. When using `--features dino`, leave out `--ref` (and make sure there's no `ref_car.png` in the input folder) or pass `--ref-tile`.
 
-Size thresholds in the script are in pixels and tuned for COWC (cars about 30 px long), including `BOX_HALF_SIZE` for `--box-prompt`. For data at a different resolution, adjust the pixel constants in `scripts/refine_labels.py`.
+**Car size:** the pixel thresholds were tuned for COWC (cars about 30 px long). They scale with `--car-length`: the mask size filter (6–90 px), the correction head's valid-car range (15–42 px), the `--box-prompt` box, the SAM point spread, the `--snap` radius and the `--negative` exclusion radius. Aspect-ratio limits don't depend on scale and stay fixed. Set `--car-length` to the median car length of your data. The script prints the scale factor it is using.
 
 ### DINOv2 files (only for `--features dino`)
 The script loads DINOv2 from local files, so no internet access is needed when it runs. These files are in `.gitignore`, so download them yourself:
@@ -266,8 +292,8 @@ I've also put those files on Google Drive here: https://drive.google.com/drive/f
 ## 3. Draw the boxes over the images
 ```bash
 python data_exploration/plot_obb_labels.py \
-    --images mini_dataset_refined/images --labels mini_dataset_refined/labels \
-    --input-labels mini_dataset/labels --out mini_dataset_refined/plots
+    --images COWC_mini_test/mini_dataset_refined/images --labels COWC_mini_test/mini_dataset_refined/labels \
+    --input-labels COWC_mini_test/mini_dataset/labels --out COWC_mini_test/mini_dataset_refined/plots
 ```
 Colors: green = SAM mask accepted, cyan = correction head, orange = fallback, magenta X = low similarity (flagged), blue dot = snapped prompt, red dot = original point label.
 
@@ -275,9 +301,9 @@ Colors: green = SAM mask accepted, cyan = correction head, orange = fallback, ma
 Pass one `--run NAME=FOLDER` per refined output folder (each needs `plots/` from step 4). They are shown left to right.
 ```bash
 python data_exploration/compare_plots_html.py \
-    --run "original=mini_dataset_refined_original" \
-    --run "default=mini_dataset_refined" \
-    --out mini_compare.html
+    --run "original=COWC_mini_test/mini_dataset_refined_original" \
+    --run "default=COWC_mini_test/mini_dataset_refined" \
+    --out COWC_mini_test/mini_compare.html
 ```
 
 ## 5. Optional (if on remote machine): View the page from a remote machine (no download needed)
@@ -296,13 +322,56 @@ On your own computer, forward port 8765 over SSH:
 - **PuTTY**: Connection → SSH → Tunnels, Source port `8765`, Destination `localhost:8765`, click **Add**, then save the session.
 - **Mac/Linux**: `ssh -N -L 8765:localhost:8765 <user>@<host>`
 
-Then open http://localhost:8765/mini_compare.html in your browser. The page reloads by itself whenever it is regenerated (step 5), so you can leave the tab open between runs.
+Then open http://localhost:8765/COWC_mini_test/mini_compare.html in your browser. The page reloads by itself whenever it is regenerated (step 5), so you can leave the tab open between runs.
 
+
+## Tuning on VEDAI (truth labels, with a holdout set)
+
+VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored against them. Only car-sized classes are used: car, van and pickup (VEDAI classes 1, 9, 11; median box 21 × 9 px). Trucks, camping cars and tractors are larger and would need their own size settings.
+
+**Holdout:** VEDAI's official `fold01test.txt` (121 images, 239 vehicles) is the holdout set and is never used for tuning. The tune split is the other 1,125 images (2,194 vehicles). Compare settings on the tune split, then check the final settings once on the holdout so the parameters aren't overfit.
+
+1. **Convert** the raw data (in `data/VEDAI/`, see "Get the datasets") into center-point inputs and true OBB labels. Each point gets a 21 × 9 px placeholder box, used as the fallback when SAM's mask is rejected:
+   ```bash
+   python scripts/VS_VEDAI_Separation_Conversion.py
+   ```
+   This writes `datasets/vedai_512/vedai_color_centerpoint/` (input) and `datasets/vedai_512/vedai_color_obb/` (truth), plus the same for IR. Tuning uses the color images.
+
+2. **Build the quick-check set** (12 tune images, 26 vehicles). The image list is checked in, so this rebuilds the same set:
+   ```bash
+   python scripts/make_vedai_subset.py --out VEDAI_mini_test --list VEDAI_mini_test/image_list.txt
+   ```
+   This creates `VEDAI_mini_test/mini_dataset/` (input), `truth/labels` and `truth/plots`. Use `--n-with N --n-empty M --seed S` instead of `--list` to sample a different set.
+
+3. **Run the sweep** (8 settings, about 10 minutes on CPU), then summarize it:
+   ```bash
+   bash scripts/run_vedai_sweep.sh
+   python scripts/summarize_vedai_sweep.py
+   ```
+   The sweep runs `refine_labels.py` with `--car-length 21` for each setting listed at the top of `scripts/run_vedai_sweep.sh` (default, box prompt, and box half-sizes 5–14 px; snap, the negative point and DINOv2 were dropped after they lowered IoU on the check set), scores each run and draws its plots. Finished runs are skipped, so an interrupted sweep can be restarted. The summary writes `VEDAI_mini_test/sweep_summary.txt` (one row per setting, sorted by mean IoU) and `VEDAI_mini_test/mini_compare.html` (the true boxes, then each run from best to worst; view it as in step 5 above). Set `PY=/path/to/python` if `python` isn't the label-refiner env.
+
+4. **Overnight: the whole tune split.** Build a subset with every tune image and run the same sweep on it (about an hour per setting):
+   ```bash
+   python scripts/make_vedai_subset.py --out VEDAI_tune --all
+   V=VEDAI_tune bash scripts/run_vedai_sweep.sh
+   V=VEDAI_tune python scripts/summarize_vedai_sweep.py
+   ```
+   To keep it running after you log out, start it in tmux: `tmux new -d -s sweep 'cd ~/label-refiner && conda run -n label-refiner bash -c "V=VEDAI_tune bash scripts/run_vedai_sweep.sh" > VEDAI_tune_sweep.log 2>&1'`.
+
+5. **Check the chosen settings on the holdout**, once:
+   ```bash
+   python scripts/refine_labels.py --input datasets/vedai_512/vedai_color_centerpoint \
+       --output datasets_refined/vedai_color_final --car-length 21 <chosen options>
+   python scripts/evaluate_updated_vedai_labels.py --pred datasets_refined/vedai_color_final --split holdout
+   ```
+
+**What the scores mean** (`scripts/evaluate_updated_vedai_labels.py`): each true vehicle is matched to one refined box by oriented IoU. The script reports mean and median IoU (unmatched vehicles count as 0), the share of vehicles at IoU ≥ 0.5 and ≥ 0.7, and median length, width and angle errors, overall and per `source` (sam / corrected / fallback). `--split tune|holdout|all` picks the images, `--truth` the truth labels, and `--fold N` another holdout fold. Results go to `evaluation_<split>_fold01.txt` and a per-vehicle `.csv` in the run folder.
+
+**Baseline:** plain 21 × 9 px boxes centered on the points (no SAM) score a mean IoU of 0.47 on the tune split (39% of vehicles at IoU ≥ 0.5). A refinement setting should beat that.
 
 # Option A: VEDAI Study Pipeline
 
-Runs the end-to-end VEDAI SAM + DINOv2 relabeling and evaluation pipeline. This option is not complete yet.
-
+> **Superseded by Option 0** (see "Tuning on VEDAI" above). Step 1 is still used to prepare the VEDAI data for Option 0. Steps 2–3 are kept for reference only: `refine_labels.py` now has this script's box prompt and DINOv2 features, and `VS_PerSAM_DINOv2.py` downloads DINOv2 from github.com, which fails on analysis.jpl.nasa.gov. `VS_evaluate_pipeline.py` counts trucks (class 2) as targets and has no holdout set; use `scripts/evaluate_updated_vedai_labels.py` instead.
 
 ## 1. Separate and convert raw dataset into working format
 ```bash
@@ -319,6 +388,8 @@ python scripts/VS_evaluate_pipeline.py
 ```
 
 # Option B: COWC Processing, PerSAM Refinement & Sensor Degradation
+> **Partly superseded by Option 0.** Step 1 is still used to prepare COWC data for Option 0. Step 2's `01cowc_persam_generate_dataset.py` is the older refinement script (kept for now; use `scripts/refine_labels.py`). Steps 3–5 (sensor degradation, validation, packaging) have no Option 0 equivalent yet and are still current.
+
 Follow this sequence to process, refine, degrade, and lock down the COWC dataset:
 
 ## 1. Tile and preprocess raw COWC aerial imagery into 512x512 patches

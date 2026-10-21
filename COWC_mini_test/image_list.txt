@@ -1,0 +1,13 @@
+# COWC_mini_test/mini_dataset: 11 tiles (65 cars), copied unchanged from datasets/COWC_Points_512/test/{images,labels}
+# (made by scripts/00pure_geographic_splitter.py). Rebuild with: python scripts/make_cowc_subset.py
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_0
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_1280
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_1536
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_1792
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_2048
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_2304
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_256
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_3328
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_3584
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_512
+Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_768

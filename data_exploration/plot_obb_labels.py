@@ -13,8 +13,8 @@ Without a report, rotated boxes are green and axis-aligned boxes orange.
 
 Example:
     python data_exploration/plot_obb_labels.py \
-        --images mini_dataset_refined/images --labels mini_dataset_refined/labels \
-        --input-labels mini_dataset/labels --out mini_dataset_refined/plots
+        --images COWC_mini_test/mini_dataset_refined/images --labels COWC_mini_test/mini_dataset_refined/labels \
+        --input-labels COWC_mini_test/mini_dataset/labels --out COWC_mini_test/mini_dataset_refined/plots
 """
 
 import argparse

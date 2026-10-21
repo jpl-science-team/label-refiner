@@ -10,7 +10,9 @@ from pathlib import Path
 from tqdm import tqdm
 from segment_anything import sam_model_registry, SamPredictor
 
-# Pixel-scale settings (tuned for COWC 512px tiles, cars ~30px long)
+# Pixel-scale settings, tuned for COWC 512px tiles with cars ~30px long. Every pixel threshold
+# (here and in the functions below) is scaled by CAR_LENGTH / BASE_CAR_LENGTH via px(), so set
+# CAR_LENGTH (or --car-length) to the typical car length of the dataset, e.g. 20 for VEDAI 512.
 # Snapping and the negative point are off by default: on the COWC mini dataset (accurate point
 # labels, ~8px similarity-map resolution) each slightly reduced the number of accepted SAM masks.
 USE_NEGATIVE_POINT = False  # add a PerSAM-style negative prompt from the similarity map
@@ -26,6 +28,12 @@ DINO_WEIGHTS = "models/dinov2_vits14_pretrain.pth"  # from dl.fbaipublicfiles.co
 DINO_UPSCALE = 2            # DINOv2 uses 14px patches; upscaling 512 -> 1024 gives ~7px resolution for ~30px cars
 USE_BOX_PROMPT = False      # VS_PerSAM_DINOv2-style prompt: a box + ring of negative points around each car
 BOX_HALF_SIZE = 18          # box prompt half-width (px); negative points sit just outside it
+CAR_LENGTH = 30             # typical car length (px) in the dataset being refined
+BASE_CAR_LENGTH = 30        # car length the pixel thresholds were tuned at (COWC)
+
+def px(value):
+    """Scales a pixel threshold tuned for COWC (~30px cars) to the dataset's CAR_LENGTH."""
+    return value * CAR_LENGTH / BASE_CAR_LENGTH
 
 # ---------------------------------------------------------
 # 1. PerSAM Visual Weights Extractor
@@ -158,10 +166,10 @@ def mask_to_yolo_obb(mask, img_w, img_h):
     # ---------------------------------------------------------
     # DEFENSIVE FILTERING: Stop massive hallucinations & noise
     # ---------------------------------------------------------
-    if max_dimension > 90: 
+    if max_dimension > px(90):
         return None
-        
-    if max_dimension < 6:
+
+    if max_dimension < px(6):
         return None
         
     aspect_ratio = max_dimension / (min_dimension + 1e-6)
@@ -214,7 +222,7 @@ def geometric_correction_head(refined_labels, img_w, img_h):
         min_dim = min(w, h)
         aspect = max_dim / (min_dim + 1e-6)
 
-        if 15 < max_dim < 42 and 1.3 < aspect < 3.2 and angle != 0.0:
+        if px(15) < max_dim < px(42) and 1.3 < aspect < 3.2 and angle != 0.0:
             valid_cars.append({
                 'center': (cx, cy),
                 'size': (w, h),
@@ -229,7 +237,7 @@ def geometric_correction_head(refined_labels, img_w, img_h):
         (cx, cy), (w, h), angle = rect
         max_dim = max(w, h)
         
-        is_bad_box = max_dim > 45 or max_dim < 8 or angle == 0.0 or angle == 90.0
+        is_bad_box = max_dim > px(45) or max_dim < px(8) or angle == 0.0 or angle == 90.0
 
         if is_bad_box:
             if len(valid_cars) > 0:
@@ -238,7 +246,7 @@ def geometric_correction_head(refined_labels, img_w, img_h):
                 matched_w, matched_h = closest_car['size']
                 matched_angle = closest_car['angle']
             else:
-                matched_w, matched_h = 30.0, 15.0
+                matched_w, matched_h = px(30.0), px(15.0)
                 matched_angle = 0.0
             
             corrected_rect = ((cx, cy), (matched_w, matched_h), matched_angle)
@@ -343,7 +351,7 @@ def refine_folder(in_dir, out_dir, predictor, target_weight, dino=None, desc="Pr
         positive_points = [(int(round(cx * img_w)), int(round(cy * img_h))) for _, cx, cy, _, _ in objs]
         neg_point = None
         if USE_NEGATIVE_POINT and positive_points:
-            neg_point = pick_negative_point(similarity_map, positive_points, NEG_EXCLUDE_RADIUS)
+            neg_point = pick_negative_point(similarity_map, positive_points, int(round(px(NEG_EXCLUDE_RADIUS))))
 
         sources, similarities, prompts = [], [], []
         # Similarity is judged relative to this image's typical (mostly background) value, which
@@ -351,32 +359,34 @@ def refine_folder(in_dir, out_dir, predictor, target_weight, dino=None, desc="Pr
         background_sim = float(np.median(similarity_map))
 
         for (cls_id, cx, cy, w, h), (lx, ly) in zip(objs, positive_points):
-            px, py = lx, ly
             if SNAP_TO_SIMILARITY_PEAK:
-                px, py = snap_to_similarity_peak(similarity_map, lx, ly, SNAP_RADIUS)
-            prompts.append((px, py))
-            similarities.append(float(similarity_map[min(py, img_h - 1), min(px, img_w - 1)]))
+                x, y = snap_to_similarity_peak(similarity_map, lx, ly, int(round(px(SNAP_RADIUS))))
+            else:
+                x, y = lx, ly
+            prompts.append((x, y))
+            similarities.append(float(similarity_map[min(y, img_h - 1), min(x, img_w - 1)]))
 
             input_box = None
             if USE_BOX_PROMPT:
                 # As in VS_PerSAM_DINOv2.py: one positive at the car, a box around it, and a ring of
                 # negatives just outside the box so the mask can't bleed into neighbours or shadows
-                r = BOX_HALF_SIZE + 1
+                half = px(BOX_HALF_SIZE)
+                r = half + 1
                 input_points = np.array([
-                    [px, py],
-                    [px - r, py], [px + r, py], [px, py - r], [px, py + r],
-                    [px - r, py - r], [px + r, py - r], [px - r, py + r], [px + r, py + r]
+                    [x, y],
+                    [x - r, y], [x + r, y], [x, y - r], [x, y + r],
+                    [x - r, y - r], [x + r, y - r], [x - r, y + r], [x + r, y + r]
                 ])
                 input_labels = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0])
-                input_box = np.array([[px - BOX_HALF_SIZE, py - BOX_HALF_SIZE, px + BOX_HALF_SIZE, py + BOX_HALF_SIZE]])
+                input_box = np.array([[x - half, y - half, x + half, y + half]])
             else:
-                nudge = 4
+                nudge = px(4)
                 input_points = np.array([
-                    [px, py],
-                    [px - nudge, py],
-                    [px + nudge, py],
-                    [px, py - nudge],
-                    [px, py + nudge]
+                    [x, y],
+                    [x - nudge, y],
+                    [x + nudge, y],
+                    [x, y - nudge],
+                    [x, y + nudge]
                 ])
                 input_labels = np.array([1, 1, 1, 1, 1])
 
@@ -494,8 +504,8 @@ def build_reference_from_tile(predictor, img, points):
     predictor.set_image(img)
     ref_mask = np.zeros((img_h, img_w), dtype=np.uint8)
     used = 0
-    for px, py in points:
-        masks, _, _ = predictor.predict(point_coords=np.array([[px, py]]), point_labels=np.array([1]),
+    for x, y in points:
+        masks, _, _ = predictor.predict(point_coords=np.array([[x, y]]), point_labels=np.array([1]),
                                         multimask_output=False)
         contours, _ = cv2.findContours(masks[0].astype("uint8"), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
@@ -504,7 +514,7 @@ def build_reference_from_tile(predictor, img, points):
         aspect = max(w, h) / (min(w, h) + 1e-6)
         # Same single-car criteria as the correction head's "valid car" check, so merged
         # blobs of several cars + shadow don't leak asphalt into the signature
-        if 15 < max(w, h) < 42 and 1.3 < aspect < 3.2:
+        if px(15) < max(w, h) < px(42) and 1.3 < aspect < 3.2:
             ref_mask[masks[0]] = 255
             used += 1
     if used == 0:
@@ -558,8 +568,8 @@ def load_reference_crop(predictor, ref_img_path, ref_mask_path=None, scale=None)
     contours, _ = cv2.findContours((mask > 127).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     length = max(cv2.minAreaRect(max(contours, key=cv2.contourArea))[1]) if contours else 0
     print(f"Reference crop: {ref_img_path} scaled x{scale:.3g} to {w}x{h}px, car mask {length:.0f}px long")
-    if not 15 < length < 42:
-        print("[WARNING] Reference car mask is outside the expected 15-42px car length; "
+    if not px(15) < length < px(42):
+        print(f"[WARNING] Reference car mask is outside the expected {px(15):.0f}-{px(42):.0f}px car length; "
               "check reference_mask.png in the output folder, or set --ref-scale / --ref-mask")
     return canvas, mask
 
@@ -650,6 +660,11 @@ if __name__ == "__main__":
                         help=f"Features for the similarity map (default {FEATURES})")
     parser.add_argument("--box-prompt", action="store_true",
                         help="Prompt SAM with a box + ring of negative points around each car (as in VS_PerSAM_DINOv2.py)")
+    parser.add_argument("--car-length", type=float, default=CAR_LENGTH,
+                        help=f"Typical car length in px; all pixel thresholds scale with it (default {CAR_LENGTH}, "
+                             f"COWC; use 20 for VEDAI 512)")
+    parser.add_argument("--box-half-size", type=float, default=None,
+                        help=f"Box prompt half-width in px (default {BOX_HALF_SIZE} scaled by --car-length)")
     args = parser.parse_args()
 
     USE_NEGATIVE_POINT = USE_NEGATIVE_POINT or args.negative
@@ -657,6 +672,12 @@ if __name__ == "__main__":
     LOW_SIM_MARGIN = args.sim_margin
     DROP_LOW_SIMILARITY = args.drop_low_sim
     USE_BOX_PROMPT = USE_BOX_PROMPT or args.box_prompt
+    CAR_LENGTH = args.car_length
+    if args.box_half_size is not None:
+        # px() scales BOX_HALF_SIZE again when it is used, so store the unscaled equivalent
+        BOX_HALF_SIZE = args.box_half_size * BASE_CAR_LENGTH / CAR_LENGTH
+    print(f"Car length {CAR_LENGTH:g}px: pixel thresholds scaled x{CAR_LENGTH / BASE_CAR_LENGTH:.3g}"
+          + (f", box prompt {2 * px(BOX_HALF_SIZE):.0f}px" if USE_BOX_PROMPT else ""))
 
     sam_predictor, dev_env = load_sam(args.model)
     dino_extractor = DINOv2FeatureExtractor(device=dev_env) if args.features == "dino" else None
