@@ -330,17 +330,27 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
 
 ### Results so far
 
-Mean IoU from the `sweep_summary.txt` files (all with `--car-length 21`). **Baseline:** plain 21 × 9 px boxes centered on the points (no SAM) score 0.47 on the tune split (39% of vehicles at IoU ≥ 0.5); a setting should beat that.
+All runs use `--car-length 21`; numbers are from the `evaluation_all_fold01.csv` files behind each `sweep_summary.txt`. IoU is given as mean / median over all true vehicles (a vehicle with no matching box counts as 0). Length and width errors are refined minus true in px, as the median with the mean absolute error in parentheses; a typical vehicle is 21 × 9 px. **Baseline:** plain 21 × 9 px boxes centered on the points (no SAM) score a mean IoU of 0.47 on the tune split (39% of vehicles at IoU ≥ 0.5); a setting should beat that.
 
-| Setting | Options | Tune, exact | Holdout, exact | Holdout, 3 × 1 px jitter |
-|---|---|---|---|---|
-| default | (5-point prompt) | 0.554 | 0.546 | 0.548 |
-| box_h7 | `--box-prompt --box-half-size 7` | 0.595 | 0.586 | 0.578 |
-| box_h7_center | `--box-prompt --box-half-size 7 --center-on-point` | not finished | 0.693 | 0.644 |
-| box_h7_hybrid_keepaxis | `--box-half-size 7 --two-pass --keep-axis-aligned` | tonight | 0.598 | 0.597 |
-| box_h7_hybrid_center_keepaxis | `--box-half-size 7 --two-pass --center-on-point --keep-axis-aligned` | tonight | **0.725** | **0.681** |
+| Setting | Options |
+|---|---|
+| default | (5-point prompt) |
+| box_h7 | `--box-prompt --box-half-size 7` |
+| box_h7_center | `--box-prompt --box-half-size 7 --center-on-point` |
+| box_h7_hybrid_keepaxis | `--box-half-size 7 --two-pass --keep-axis-aligned` |
+| box_h7_hybrid_center_keepaxis | `--box-half-size 7 --two-pass --center-on-point --keep-axis-aligned` |
 
-Median length / width errors on the holdout (refined minus true, px; exact and 3 × 1 jitter are within 0.2 px of each other): default +0.0 / +1.5, box_h7 and box_h7_center −2.2 / +0.0, both two-pass settings +0.0 / +0.1.
+Holdout (239 vehicles):
+
+| Setting | Exact: IoU | Exact: length | Exact: width | 3 × 1 jitter: IoU | Jitter: length | Jitter: width |
+|---|---|---|---|---|---|---|
+| default | 0.546 / 0.575 | +0.0 (2.0) | +1.5 (2.3) | 0.548 / 0.578 | +0.2 (2.0) | +1.5 (2.3) |
+| box_h7 | 0.586 / 0.590 | −2.2 (3.9) | +0.0 (1.4) | 0.578 / 0.590 | −2.2 (4.0) | +0.0 (1.4) |
+| box_h7_center | 0.693 / 0.715 | −2.2 (4.0) | +0.0 (1.4) | 0.644 / 0.659 | −2.2 (4.0) | +0.0 (1.4) |
+| box_h7_hybrid_keepaxis | 0.598 / 0.610 | +0.0 (2.2) | +0.1 (1.4) | 0.597 / 0.607 | +0.1 (2.2) | +0.0 (1.4) |
+| box_h7_hybrid_center_keepaxis | **0.725 / 0.747** | +0.0 (2.2) | +0.1 (1.5) | **0.681 / 0.692** | +0.1 (2.2) | +0.0 (1.4) |
+
+Tune split (2,194 vehicles), exact points: default 0.554 / 0.576 (length +0.6, width +1.6), box_h7 0.595 / 0.603 (length −2.0, width +0.1). box_h7_center didn't finish; the two `keepaxis` settings and the 3 × 1 jittered tune set are next.
 
 Findings so far:
 - **The box prompt** (`--box-prompt --box-half-size 7`, a 14 px box) beats the point prompt on both splits, but its boxes come out about 2 px short.
