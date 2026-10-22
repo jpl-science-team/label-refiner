@@ -9,6 +9,10 @@
 # Then: python scripts/summarize_vedai_sweep.py  (same V=...) for the table and comparison page.
 set -e
 PY=${PY:-python}
+if [ ! -f models/sam_vit_b.pth ]; then
+  echo "ERROR: models/sam_vit_b.pth not found (run from the repo root; see models/README.md to download it)" >&2
+  exit 1
+fi
 V=${V:-VEDAI_mini_test}
 IN=$V/mini_dataset
 CAR_LENGTH=21   # median length of VEDAI car/van/pickup boxes
@@ -77,8 +81,15 @@ for entry in "${RUNS[@]}"; do
   if [ ! -f "$out/refinement_report.csv" ]; then
     t=$SECONDS
     echo "=== $name: $opts"
-    $PY scripts/refine_labels.py --input $IN --output $out --car-length $CAR_LENGTH $opts 2>&1 \
-        | grep -E "Car length|Reference|Boxes"
+    # Keep the full output in a log; only show the summary lines unless the run fails
+    mkdir -p $out
+    if ! $PY scripts/refine_labels.py --input $IN --output $out --car-length $CAR_LENGTH $opts > $out/refine.log 2>&1 \
+        || [ ! -f "$out/refinement_report.csv" ]; then
+      echo "ERROR: refine_labels.py failed for $name, last lines of $out/refine.log:" >&2
+      tail -n 15 $out/refine.log >&2
+      exit 1
+    fi
+    grep -E "Car length|Reference|Boxes" $out/refine.log || true
     echo "    $((SECONDS - t)) s"
   fi
   $PY scripts/evaluate_updated_vedai_labels.py --pred $out --truth $V/truth/labels --split all > /dev/null

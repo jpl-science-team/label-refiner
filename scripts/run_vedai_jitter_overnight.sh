@@ -8,6 +8,7 @@
 #   V=VEDAI_tune_jitterL3W1 python scripts/summarize_vedai_sweep.py
 set -e
 PY=${PY:-python}
+[ -f models/sam_vit_b.pth ] || { echo "ERROR: models/sam_vit_b.pth not found (see models/README.md)" >&2; exit 1; }
 
 [ -d VEDAI_tune/mini_dataset ] || $PY scripts/make_vedai_subset.py --out VEDAI_tune --all
 [ -d VEDAI_tune_jitterL3W1/mini_dataset ] || $PY scripts/make_vedai_subset.py --out VEDAI_tune_jitterL3W1 --all \
