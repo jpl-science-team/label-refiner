@@ -330,7 +330,7 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
 
 ### Results so far
 
-All runs use `--car-length 21`; numbers are from the `evaluation_all_fold01.csv` files behind each `sweep_summary.txt`. IoU is given as mean / median over all true vehicles (a vehicle with no matching box counts as 0). Length and width errors are refined minus true in px, as the median with the mean absolute error in parentheses; a typical vehicle is 21 × 9 px. **Baseline:** plain 21 × 9 px boxes centered on the points (no SAM) score a mean IoU of 0.47 on the tune split (39% of vehicles at IoU ≥ 0.5); a setting should beat that.
+All runs use `--car-length 21`; numbers are from the `evaluation_all_fold01.csv` files behind each `sweep_summary.txt`. All values are medians over the true vehicles: IoU (a vehicle with no matching box counts as 0), and the absolute length and width difference between the refined and true box in px. A typical vehicle is 21 × 9 px. The signed median shows the bias: box_h7 and box_h7_center boxes are 2.2 px too short, default boxes 1.5 px too wide, and the two-pass settings are unbiased (within 0.1 px). **Baseline:** plain 21 × 9 px boxes centered on the points (no SAM) score a mean IoU of 0.47 on the tune split (these earlier comparisons are mean IoU) (39% of vehicles at IoU ≥ 0.5); a setting should beat that.
 
 | Setting | Options |
 |---|---|
@@ -342,21 +342,21 @@ All runs use `--car-length 21`; numbers are from the `evaluation_all_fold01.csv`
 
 Holdout (239 vehicles):
 
-| Setting | Exact: IoU | Exact: length | Exact: width | 3 × 1 jitter: IoU | Jitter: length | Jitter: width |
+| Setting | Exact: IoU | Exact: \|length error\| (px) | Exact: \|width error\| (px) | 3 × 1 jitter: IoU | Jitter: \|length error\| (px) | Jitter: \|width error\| (px) |
 |---|---|---|---|---|---|---|
-| default | 0.546 / 0.575 | +0.0 (2.0) | +1.5 (2.3) | 0.548 / 0.578 | +0.2 (2.0) | +1.5 (2.3) |
-| box_h7 | 0.586 / 0.590 | −2.2 (3.9) | +0.0 (1.4) | 0.578 / 0.590 | −2.2 (4.0) | +0.0 (1.4) |
-| box_h7_center | 0.693 / 0.715 | −2.2 (4.0) | +0.0 (1.4) | 0.644 / 0.659 | −2.2 (4.0) | +0.0 (1.4) |
-| box_h7_hybrid_keepaxis | 0.598 / 0.610 | +0.0 (2.2) | +0.1 (1.4) | 0.597 / 0.607 | +0.1 (2.2) | +0.0 (1.4) |
-| box_h7_hybrid_center_keepaxis | **0.725 / 0.747** | +0.0 (2.2) | +0.1 (1.5) | **0.681 / 0.692** | +0.1 (2.2) | +0.0 (1.4) |
+| default | 0.575 | 1.2 | 2.0 | 0.578 | 1.3 | 2.0 |
+| box_h7 | 0.590 | 2.6 | 1.0 | 0.590 | 2.6 | 1.0 |
+| box_h7_center | 0.715 | 2.6 | 1.0 | 0.659 | 2.6 | 1.0 |
+| box_h7_hybrid_keepaxis | 0.610 | 1.3 | 1.0 | 0.607 | 1.4 | 1.0 |
+| box_h7_hybrid_center_keepaxis | **0.747** | 1.4 | 1.0 | **0.692** | 1.4 | 1.0 |
 
-Tune split (2,194 vehicles), exact points: default 0.554 / 0.576 (length +0.6, width +1.6), box_h7 0.595 / 0.603 (length −2.0, width +0.1). box_h7_center didn't finish; the two `keepaxis` settings and the 3 × 1 jittered tune set are next.
+Tune split (2,194 vehicles), exact points (medians): default IoU 0.576, length 1.4, width 2.0; box_h7 IoU 0.603, length 2.4, width 1.0. box_h7_center didn't finish; the two `keepaxis` settings and the 3 × 1 jittered tune set are next.
 
 Findings so far:
 - **The box prompt** (`--box-prompt --box-half-size 7`, a 14 px box) beats the point prompt on both splits, but its boxes come out about 2 px short.
 - **`--two-pass`** fixes the length (median length error 0 px) without making boxes wider. With its checks and `--keep-axis-aligned`, the boxes more than 20° off dropped from 12 to 5 of 239 holdout vehicles (box_h7 has 6).
-- **`--center-on-point`** scores highest with exact points because it copies the true center from the input. With 3 × 1 px jitter it loses some of that (0.725 → 0.681) but is still the best setting, since the point stays within 1 px of the car's center line. With points up to 4 px off in any direction (the earlier study), it dropped below the 5-point prompt (holdout 0.501–0.530 against 0.538). So it suits points on the car's center line, and hurts if they can be off to the side.
-- **`--snap`, DINOv2 features and `--pick-mask`** lowered IoU. On the tune split with 4 px jitter, snap variants scored 0.46–0.53 against 0.564 for box_h7. `--pick-mask` scored 0.613–0.634 against 0.649–0.657 without it on the quick-check set.
+- **`--center-on-point`** scores highest with exact points because it copies the true center from the input. With 3 × 1 px jitter it loses some of that (median IoU 0.747 → 0.692) but is still the best setting, since the point stays within 1 px of the car's center line. With points up to 4 px off in any direction (the earlier study), it dropped below the 5-point prompt (holdout mean IoU 0.501–0.530 against 0.538). So it suits points on the car's center line, and hurts if they can be off to the side.
+- **`--snap`, DINOv2 features and `--pick-mask`** lowered IoU. On the tune split with 4 px jitter, snap variants had a mean IoU of 0.46–0.53 against 0.564 for box_h7. `--pick-mask` had 0.613–0.634 against 0.649–0.657 without it on the quick-check set.
 - **The reference:** with no `--ref` and no `ref_car.png` in the input folder (as in these runs), the reference is the input image with the most labels (`00000044_co` for the tune split, `00000027_co` for the holdout), not the COWC crop. On VEDAI it only drives the `low_similarity` flags, which almost never fire (0 of 2,194 tune vehicles).
 
 ## How Option 0 relates to Options A and B
