@@ -171,7 +171,12 @@ for run in "default|" "box|--box-prompt" "two_pass|--two-pass"; do
       --ref datasets/COWC_Points_512/ref_car.png $opts
 done
 ```
-The VEDAI command uses `--center-on-point`, which only suits points on the car's center line (VEDAI's are exact box centers). For hand-clicked points that may be off to the side, drop it (`--box-half-size 7 --two-pass`). Adding `--keep-axis-aligned` made no difference on the tune split and was slightly better on the holdout (mean IoU 0.725 vs 0.718, same median).
+The VEDAI command uses `--center-on-point`, which centers each box on its label point. That works when the points lie on the car's center line: VEDAI's are exact box centers, and with points up to 3 px along and 1 px across the car it was still the best setting (tune-split median IoU 0.696). If your points can be several px off to the side of the car (with points up to 4 px off in any direction it scored below the default), leave `--center-on-point` out:
+```bash
+python scripts/refine_labels.py --input datasets/vedai_512/vedai_color_centerpoint --output datasets_refined/vedai_color \
+    --car-length 21 --box-half-size 7 --two-pass
+```
+`--keep-axis-aligned` can be added to either command: it made no difference on the tune split and was slightly better on the holdout (mean IoU 0.725 vs 0.718, same median).
 
 For each labeled point, SAM segments the car (by default prompted with the point plus 4 points 4 px up, down, left and right, scaled by `--car-length`, as in Option B), the mask's minimum-area rectangle becomes the OBB, and masks that are too big, too small or the wrong shape are rejected (the placeholder box is kept instead). A geometric correction head then replaces boxes that still look wrong with a nearby car's size and angle.
 
