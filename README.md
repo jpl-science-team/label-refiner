@@ -328,9 +328,14 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
 
 **What the scores mean** (`scripts/evaluate_updated_vedai_labels.py`): each true vehicle is matched to one refined box by oriented IoU. The script reports mean and median IoU (unmatched vehicles count as 0), the share of vehicles at IoU ≥ 0.5 and ≥ 0.7, and median length, width and angle errors (refined minus true, in px), overall and per `source` (sam / corrected / fallback). `--split tune|holdout|all` picks the images, `--truth` the truth labels, and `--fold N` another holdout fold. Results go to `evaluation_<split>_fold01.txt` and a per-vehicle `.csv` in the run folder.
 
-### Results so far
+### Results
 
-All runs use `--car-length 21`; numbers are from the `evaluation_all_fold01.csv` files behind each `sweep_summary.txt`. All values are medians over the true vehicles: IoU (a vehicle with no matching box counts as 0), and the absolute length and width difference between the refined and true box in px. A typical vehicle is 21 × 9 px. The signed median shows the bias: box_h7 and box_h7_center boxes are 2.2 px too short, default boxes 1.5 px too wide, and the two-pass settings are unbiased (within 0.1 px). **Baseline:** plain 21 × 9 px boxes centered on the points (no SAM) score a mean IoU of 0.47 on the tune split (these earlier comparisons are mean IoU) (39% of vehicles at IoU ≥ 0.5); a setting should beat that.
+All runs use `--car-length 21` on the color images, and are scored on two splits of VEDAI's 1,246 images:
+
+- **Tune split:** the 1,125 images (2,194 vehicles) not in `fold01test.txt`, in `VEDAI_tune/` (exact points) and `VEDAI_tune_jitterL3W1/` (3 × 1 px jitter). All settings were compared here.
+- **Holdout:** the 121 images (239 vehicles) in `fold01test.txt`, in `VEDAI_holdout/` and `VEDAI_holdout_jitterL3W1/`. Only the main candidates were run here, once, as a final check.
+
+The numbers come from the `evaluation_all_fold01.csv` files behind each set's `sweep_summary.txt` (which also has the means). IoU is the median over the true vehicles; a vehicle with no matching box counts as 0. Length and width errors are refined minus true box, in px, and each table says how it summarizes them. A typical vehicle is 21 × 9 px. **Baseline:** plain 21 × 9 px boxes centered on the points (no SAM) score a mean IoU of 0.47 on the tune split, with 39% of vehicles at IoU ≥ 0.5; a setting should beat that.
 
 | Setting | Options |
 |---|---|
@@ -339,8 +344,13 @@ All runs use `--car-length 21`; numbers are from the `evaluation_all_fold01.csv`
 | box_h7_center | `--box-prompt --box-half-size 7 --center-on-point` |
 | box_h7_hybrid_keepaxis | `--box-half-size 7 --two-pass --keep-axis-aligned` |
 | box_h7_hybrid_center_keepaxis | `--box-half-size 7 --two-pass --center-on-point --keep-axis-aligned` |
+| box_h7_hybrid, box_h7_hybrid_center | as the two above, without `--keep-axis-aligned` |
+| box_h7_center_grow | `--box-prompt --box-half-size 7 --center-on-point --grow-length 2.5` |
+| default_snap | `--snap` |
+| box_h7_snap | `--box-prompt --box-half-size 7 --snap` |
+| box_h7_dino_snap | `--box-prompt --box-half-size 7 --features dino --snap` |
 
-Holdout (239 vehicles):
+**Holdout** (121 images, 239 vehicles). Length and width columns are median absolute errors in px:
 
 | Setting | Exact: IoU | Exact: \|length error\| (px) | Exact: \|width error\| (px) | 3 × 1 jitter: IoU | Jitter: \|length error\| (px) | Jitter: \|width error\| (px) |
 |---|---|---|---|---|---|---|
@@ -350,12 +360,12 @@ Holdout (239 vehicles):
 | box_h7_hybrid_keepaxis | 0.610 | 1.3 | 1.0 | 0.607 | 1.4 | 1.0 |
 | box_h7_hybrid_center_keepaxis | **0.747** | 1.4 | 1.0 | **0.692** | 1.4 | 1.0 |
 
-Tune split (2,194 vehicles, 1,125 images; full tables in `VEDAI_tune/sweep_summary.txt` and `VEDAI_tune_jitterL3W1/sweep_summary.txt`). Here IoU is the median (as in the holdout table; means are in the summaries), and the length and width columns are signed median error / mean absolute error in px, then the share of vehicles within 2 px (length) or 1 px (width). The `keepaxis` settings are left out: on the tune split they gave exactly the same labels as their pairs without it. On the holdout it did change a few boxes (15 → 4 corrected by the correction head for box_h7_hybrid_center), but those runs are from Oct 21, before the tune runs, and it's not yet checked whether the current code still differs there.
+**Tune split** (1,125 images, 2,194 vehicles; full tables in `VEDAI_tune/sweep_summary.txt` and `VEDAI_tune_jitterL3W1/sweep_summary.txt`). The length and width columns are signed median error / mean absolute error in px, then the share of vehicles within 2 px (length) or 1 px (width). The `keepaxis` settings are left out: on the tune split they gave exactly the same labels as their pairs without it. On the holdout it did change a few boxes (15 → 4 corrected by the correction head for box_h7_hybrid_center), but those runs are from Oct 21, before the tune runs, and it's not yet checked whether the current code still differs there.
 
 | Setting | Exact: IoU | IoU ≥ 0.7 | Length (px) | ≤ 2 px | Width (px) | ≤ 1 px | 3 × 1 jitter: IoU | IoU ≥ 0.7 | Length (px) | Width (px) |
 |---|---|---|---|---|---|---|---|---|---|---|
 | box_h7_hybrid_center | **0.760** | **69%** | +0.5 / 2.2 | 61% | +0.2 / 1.4 | 47% | **0.696** | **49%** | +0.5 / 2.2 | +0.1 / 1.4 |
-| box_h7_center_grow (`--grow-length 2.5`) | 0.723 | 57% | +0.5 / 3.2 | 43% | +0.1 / 1.4 | 48% | 0.673 | 39% | +0.2 / 3.4 | +0.1 / 1.4 |
+| box_h7_center_grow | 0.723 | 57% | +0.5 / 3.2 | 43% | +0.1 / 1.4 | 48% | 0.673 | 39% | +0.2 / 3.4 | +0.1 / 1.4 |
 | box_h7_center | 0.724 | 57% | −2.0 / 3.8 | 44% | +0.1 / 1.4 | 48% | 0.659 | 35% | −2.2 / 4.0 | +0.1 / 1.4 |
 | box_h7_hybrid | 0.619 | 24% | +0.5 / 2.2 | 62% | +0.1 / 1.4 | 48% | 0.612 | 22% | +0.5 / 2.2 | +0.1 / 1.4 |
 | box_h7 | 0.603 | 20% | −2.0 / 3.8 | 44% | +0.1 / 1.4 | 49% | 0.593 | 18% | −2.2 / 4.0 | +0.1 / 1.4 |
@@ -366,7 +376,7 @@ Tune split (2,194 vehicles, 1,125 images; full tables in `VEDAI_tune/sweep_summa
 
 Jitter barely changes the size errors; it lowers IoU by moving the box. True vehicles are 21 px long (18–25 for the middle 80%) and 9 px wide (7–10), so the best setting's errors are about 10% of the length and 17% of the width. In that run the 31 boxes fixed by the geometric correction are the weak spot: about 4 px short with a 12° median angle error, against 2.4° overall.
 
-**box_h7_hybrid_center, holdout vs. tune split** (exact points; the same setting as the VEDAI example in step 2):
+**box_h7_hybrid_center, holdout (121 images) vs. tune split (1,125 images)** (exact points; the same setting as the VEDAI example in step 2):
 
 | Metric | Holdout (239 vehicles) | Tune split (2,194 vehicles) |
 |---|---|---|
@@ -383,7 +393,7 @@ Jitter barely changes the size errors; it lowers IoU by moving the box. True veh
 
 The holdout is only 0.01–0.02 lower, so the setting isn't overfit to the tune split. The correction head changed more boxes on the holdout (6% vs. 1.4%); with `--keep-axis-aligned` that drops to 4 and the mean IoU rises to 0.725 (same median). This setting hasn't been run on the jittered holdout; its `keepaxis` version scored a median IoU of 0.692 there.
 
-Findings so far:
+Findings:
 - **The box prompt** (`--box-prompt --box-half-size 7`, a 14 px box) beats the point prompt on both splits, but its boxes come out about 2 px short.
 - **`--two-pass`** fixes the length (median length error 0 px) without making boxes wider. With its checks and `--keep-axis-aligned`, the boxes more than 20° off dropped from 12 to 5 of 239 holdout vehicles (box_h7 has 6).
 - **`--center-on-point`** scores highest with exact points because it copies the true center from the input. With 3 × 1 px jitter it loses some of that (median IoU 0.747 → 0.692) but is still the best setting, since the point stays within 1 px of the car's center line. With points up to 4 px off in any direction (the earlier study), it dropped below the 5-point prompt (holdout mean IoU 0.501–0.530 against 0.538). So it suits points on the car's center line, and hurts if they can be off to the side.
