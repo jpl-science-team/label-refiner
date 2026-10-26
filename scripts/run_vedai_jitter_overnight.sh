@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Overnight jitter study on the whole VEDAI tune split (1,125 images). Builds two sets (exact
 # center points, and points moved up to 3 px along the vehicle and 1 px across it), then runs the
-# jitter sweep on both at the same time (on 32 CPUs about 2.3 h per setting, 3.3 h for DINOv2). Run from the repo root inside tmux:
+# jitter sweep on both at the same time (on analysis.jpl.nasa.gov, CPU only: about 1-2 h per setting,
+# about 15.5 h for all 12 settings). Run from the repo root inside tmux:
 #   tmux new -d -s sweep 'cd ~/label-refiner && conda run -n label-refiner bash scripts/run_vedai_jitter_overnight.sh > VEDAI_jitter_overnight.log 2>&1'
 # Restarting skips finished runs. Afterwards:
 #   V=VEDAI_tune python scripts/summarize_vedai_sweep.py
@@ -10,8 +11,8 @@ set -e
 PY=${PY:-python}
 [ -f models/sam_vit_b.pth ] || { echo "ERROR: models/sam_vit_b.pth not found (see models/README.md)" >&2; exit 1; }
 
-[ -d VEDAI_tune/mini_dataset ] || $PY scripts/make_vedai_subset.py --out VEDAI_tune --all
-[ -d VEDAI_tune_jitterL3W1/mini_dataset ] || $PY scripts/make_vedai_subset.py --out VEDAI_tune_jitterL3W1 --all \
+[ -d VEDAI_tune/input_dataset ] || $PY scripts/make_vedai_subset.py --out VEDAI_tune --all
+[ -d VEDAI_tune_jitterL3W1/input_dataset ] || $PY scripts/make_vedai_subset.py --out VEDAI_tune_jitterL3W1 --all \
     --jitter-length 3 --jitter-width 1
 
 SETS=(VEDAI_tune VEDAI_tune_jitterL3W1)

@@ -157,9 +157,9 @@ python scripts/make_cowc_subset.py    # reads COWC_mini_test/image_list.txt, wri
 python scripts/refine_labels.py --input COWC_mini_test/mini_dataset --output COWC_mini_test/mini_dataset_refined_box \
     --ref datasets/COWC_Points_512/ref_car.png --box-prompt
 
-# Example for VEDAI (best on the VEDAI holdout set, see "Tuning on VEDAI"; will be updated after the full tune-split run)
+# Example for VEDAI (box_h7_hybrid_center: best on the VEDAI tune split, see "Tuning on VEDAI")
 python scripts/refine_labels.py --input datasets/vedai_512/vedai_color_centerpoint --output datasets_refined/vedai_color \
-    --car-length 21 --box-half-size 7 --two-pass --center-on-point --keep-axis-aligned
+    --car-length 21 --box-half-size 7 --two-pass --center-on-point
 ```
 This takes about 3 s per image on CPU.
 
@@ -171,7 +171,7 @@ for run in "default|" "box|--box-prompt" "two_pass|--two-pass"; do
       --ref datasets/COWC_Points_512/ref_car.png $opts
 done
 ```
-The VEDAI command uses `--center-on-point`, which only suits points on the car's center line (VEDAI's are exact box centers). For hand-clicked points that may be off to the side, drop it (`--box-half-size 7 --two-pass --keep-axis-aligned`).
+The VEDAI command uses `--center-on-point`, which only suits points on the car's center line (VEDAI's are exact box centers). For hand-clicked points that may be off to the side, drop it (`--box-half-size 7 --two-pass`). Adding `--keep-axis-aligned` made no difference on the tune split and was slightly better on the holdout (mean IoU 0.725 vs 0.718, same median).
 
 For each labeled point, SAM segments the car (by default prompted with the point plus 4 points 4 px up, down, left and right, scaled by `--car-length`, as in Option B), the mask's minimum-area rectangle becomes the OBB, and masks that are too big, too small or the wrong shape are rejected (the placeholder box is kept instead). A geometric correction head then replaces boxes that still look wrong with a nearby car's size and angle.
 
@@ -272,7 +272,7 @@ Then open http://localhost:8765/COWC_mini_test/mini_compare.html in your browser
 
 VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored against them. Only car-sized classes are used: car, van and pickup (VEDAI classes 1, 9, 11). A typical vehicle is 21 × 9 px (median of the true boxes in the 512 px tiles; 10–90% range 18–25 × 7–10 px). Trucks, camping cars and tractors are larger and would need their own size settings.
 
-**Holdout:** VEDAI's official `fold01test.txt` (121 images, 239 vehicles) is the holdout set and is never used for tuning. The tune split is the other 1,125 images (2,194 vehicles). Compare settings on the tune split, then check the final settings once on the holdout so the parameters aren't overfit.
+**Holdout:** VEDAI's official `fold01test.txt` (121 images, 239 vehicles) is the holdout set and is never used for tuning. The tune split is the other 1,125 images (2,194 vehicles). There is no separate split folder: all 1,246 converted images stay together in `datasets/vedai_512/vedai_color_centerpoint/`, and `make_vedai_subset.py` reads `data/VEDAI/Annotations512/fold01test.txt` each time to copy either the tune images (`--all`, `--list`) or the holdout images (`--holdout`) into a test set, with the names it used in `<set>/image_list.txt`. Compare settings on the tune split, then check the final settings once on the holdout so the parameters aren't overfit.
 
 **Exact and jittered points:** VEDAI's input points are the exact centers of the true boxes, which hand-clicked labels aren't. Each test set can be built a second time with jittered points: `make_vedai_subset.py --jitter-length 3 --jitter-width 1` moves each point by a random offset of up to 3 px along its vehicle and 1 px across it (uniform over an ellipse aligned with the true box, fixed seed), leaving the truth unchanged. Every setting is scored on both. (`--jitter R` moves points up to R px in any direction; an earlier study used 4 px, but 4 px sideways is almost half a car's width.)
 
@@ -288,7 +288,7 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
    python scripts/make_vedai_subset.py --out VEDAI_mini_jitterL3W1 --list VEDAI_mini_test/image_list.txt \
        --jitter-length 3 --jitter-width 1
    ```
-   Each set has `mini_dataset/` (input), `truth/labels` and `truth/plots`. Use `--n-with N --n-empty M --seed S` instead of `--list` to sample a different set.
+   Each set has `input_dataset/` (the set's full input: images and point labels, however many images the set has), `truth/labels` and `truth/plots`; each run writes `<set>/input_dataset_refined_<setting>/`. Use `--n-with N --n-empty M --seed S` instead of `--list` to sample a different set.
 
 3. **Run a sweep**, then summarize it. `scripts/run_vedai_sweep.sh` runs `refine_labels.py` with `--car-length 21` for each setting in one of its lists (`SWEEP=boxsize`, the default: box half-sizes 6–14 px; `SWEEP=jitter`: the settings below; `SWEEP=holdout`: the final candidates), scores each run and draws its plots. `V=` picks the test set. Finished runs are skipped, so an interrupted sweep can be restarted:
    ```bash
@@ -297,9 +297,9 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
    V=VEDAI_mini_test python scripts/summarize_vedai_sweep.py
    V=VEDAI_mini_jitterL3W1 python scripts/summarize_vedai_sweep.py
    ```
-   The summary writes `<set>/sweep_summary.txt` (one row per setting, sorted by mean IoU) and `<set>/mini_compare.html` (the true boxes, then each run from best to worst; view it as in step 5 above). Set `PY=/path/to/python` if `python` isn't the label-refiner env.
+   The summary writes `<set>/sweep_summary.txt` (one row per setting, sorted by mean IoU, then a second table of length and width errors: median, mean absolute, 90th percentile, share within 2 px / 1 px, and error relative to the true size) and `<set>/mini_compare.html` (the true boxes, then each run from best to worst; view it as in step 5 above). Set `PY=/path/to/python` if `python` isn't the label-refiner env.
 
-4. **Overnight: the whole tune split.** `scripts/run_vedai_jitter_overnight.sh` builds `VEDAI_tune` (exact points) and `VEDAI_tune_jitterL3W1`, runs `SWEEP=jitter` on both at once (about 2.3 h per setting on 32 CPUs, 3.3 h for DINOv2) and summarizes them. Start it in tmux so it keeps running after you log out:
+4. **Overnight: the whole tune split.** `scripts/run_vedai_jitter_overnight.sh` builds `VEDAI_tune` (exact points) and `VEDAI_tune_jitterL3W1`, runs `SWEEP=jitter` on both at once and summarizes them. On analysis.jpl.nasa.gov (CPU only) each setting took about 1–2 h with both sets running, and the whole 12-setting sweep about 15.5 h. Start it in tmux so it keeps running after you log out:
    ```bash
    tmux new -d -s sweep 'cd ~/label-refiner && conda run -n label-refiner bash scripts/run_vedai_jitter_overnight.sh > VEDAI_jitter_overnight.log 2>&1'
    ```
@@ -319,9 +319,9 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
 6. **Look at individual vehicles.** Full-tile plots are too small to judge a 20 px car. `data_exploration/vehicle_crops_html.py` makes a page with one row per true vehicle and one column per run: a 48 px crop enlarged 5×, with the true box in white, the run's box in green and the input point in red, worst IoU (of the first run) first:
    ```bash
    python data_exploration/vehicle_crops_html.py --set VEDAI_holdout \
-       --run two_pass=VEDAI_holdout/mini_dataset_refined_box_h7_hybrid_keepaxis \
-       --run box_h7=VEDAI_holdout/mini_dataset_refined_box_h7 \
-       --run default=VEDAI_holdout/mini_dataset_refined_default \
+       --run two_pass=VEDAI_holdout/input_dataset_refined_box_h7_hybrid_keepaxis \
+       --run box_h7=VEDAI_holdout/input_dataset_refined_box_h7 \
+       --run default=VEDAI_holdout/input_dataset_refined_default \
        --out VEDAI_holdout/crops.html
    ```
    It writes the crops to `VEDAI_holdout/crops_crops/`. View it like the comparison page (step 5 of Option 0).
@@ -350,7 +350,38 @@ Holdout (239 vehicles):
 | box_h7_hybrid_keepaxis | 0.610 | 1.3 | 1.0 | 0.607 | 1.4 | 1.0 |
 | box_h7_hybrid_center_keepaxis | **0.747** | 1.4 | 1.0 | **0.692** | 1.4 | 1.0 |
 
-Tune split (2,194 vehicles), exact points (medians): default IoU 0.576, length 1.4, width 2.0; box_h7 IoU 0.603, length 2.4, width 1.0. box_h7_center didn't finish; the two `keepaxis` settings and the 3 × 1 jittered tune set are next.
+Tune split (2,194 vehicles, 1,125 images; full tables in `VEDAI_tune/sweep_summary.txt` and `VEDAI_tune_jitterL3W1/sweep_summary.txt`). Here IoU is the median (as in the holdout table; means are in the summaries), and the length and width columns are signed median error / mean absolute error in px, then the share of vehicles within 2 px (length) or 1 px (width). The `keepaxis` settings are left out: on the tune split they gave exactly the same labels as their pairs without it. On the holdout it did change a few boxes (15 → 4 corrected by the correction head for box_h7_hybrid_center), but those runs are from Oct 21, before the tune runs, and it's not yet checked whether the current code still differs there.
+
+| Setting | Exact: IoU | IoU ≥ 0.7 | Length (px) | ≤ 2 px | Width (px) | ≤ 1 px | 3 × 1 jitter: IoU | IoU ≥ 0.7 | Length (px) | Width (px) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| box_h7_hybrid_center | **0.760** | **69%** | +0.5 / 2.2 | 61% | +0.2 / 1.4 | 47% | **0.696** | **49%** | +0.5 / 2.2 | +0.1 / 1.4 |
+| box_h7_center_grow (`--grow-length 2.5`) | 0.723 | 57% | +0.5 / 3.2 | 43% | +0.1 / 1.4 | 48% | 0.673 | 39% | +0.2 / 3.4 | +0.1 / 1.4 |
+| box_h7_center | 0.724 | 57% | −2.0 / 3.8 | 44% | +0.1 / 1.4 | 48% | 0.659 | 35% | −2.2 / 4.0 | +0.1 / 1.4 |
+| box_h7_hybrid | 0.619 | 24% | +0.5 / 2.2 | 62% | +0.1 / 1.4 | 48% | 0.612 | 22% | +0.5 / 2.2 | +0.1 / 1.4 |
+| box_h7 | 0.603 | 20% | −2.0 / 3.8 | 44% | +0.1 / 1.4 | 49% | 0.593 | 18% | −2.2 / 4.0 | +0.1 / 1.4 |
+| default | 0.576 | 14% | +0.6 / 2.0 | 63% | +1.6 / 2.5 | 32% | 0.576 | 14% | +0.6 / 2.0 | +1.6 / 2.5 |
+| default_snap | 0.562 | 13% | +0.7 / 2.1 | 62% | +1.8 / 2.6 | 32% | 0.562 | 12% | +0.7 / 2.1 | +1.8 / 2.6 |
+| box_h7_snap | 0.515 | 10% | −2.4 / 4.1 | 42% | +0.8 / 1.6 | 45% | 0.519 | 10% | −2.2 / 4.1 | +0.8 / 1.6 |
+| box_h7_dino_snap | 0.488 | 10% | −4.0 / 5.3 | 31% | +0.2 / 1.6 | 43% | 0.489 | 9% | −4.0 / 5.2 | +0.2 / 1.6 |
+
+Jitter barely changes the size errors; it lowers IoU by moving the box. True vehicles are 21 px long (18–25 for the middle 80%) and 9 px wide (7–10), so the best setting's errors are about 10% of the length and 17% of the width. In that run the 31 boxes fixed by the geometric correction are the weak spot: about 4 px short with a 12° median angle error, against 2.4° overall.
+
+**box_h7_hybrid_center, holdout vs. tune split** (exact points; the same setting as the VEDAI example in step 2):
+
+| Metric | Holdout (239 vehicles) | Tune split (2,194 vehicles) |
+|---|---|---|
+| Mean IoU | 0.718 | 0.733 |
+| Median IoU | 0.747 | 0.760 |
+| IoU ≥ 0.5 | 91% | 95% |
+| IoU ≥ 0.7 | 67% | 69% |
+| Length: median / mean absolute error | +0.0 / 2.06 px | +0.5 / 2.17 px |
+| Length within 2 px | 60% | 61% |
+| Width: median / mean absolute error | +0.1 / 1.43 px | +0.2 / 1.43 px |
+| Width within 1 px | 48% | 47% |
+| Median angle error | 2.7° | 2.4° |
+| Boxes: sam / corrected / fallback / unmatched | 224 / 15 / 0 / 0 | 2159 / 31 / 4 / 0 |
+
+The holdout is only 0.01–0.02 lower, so the setting isn't overfit to the tune split. The correction head changed more boxes on the holdout (6% vs. 1.4%); with `--keep-axis-aligned` that drops to 4 and the mean IoU rises to 0.725 (same median). This setting hasn't been run on the jittered holdout; its `keepaxis` version scored a median IoU of 0.692 there.
 
 Findings so far:
 - **The box prompt** (`--box-prompt --box-half-size 7`, a 14 px box) beats the point prompt on both splits, but its boxes come out about 2 px short.

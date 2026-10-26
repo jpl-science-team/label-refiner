@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Parameter sweep for refine_labels.py on a VEDAI subset made by make_vedai_subset.py
-# (a dir with mini_dataset/ and truth/labels). Run from the repo root:
+# (a dir with input_dataset/ and truth/labels). Run from the repo root:
 #   bash scripts/run_vedai_sweep.sh                 # VEDAI_mini_test, 12 images, ~10 min
-#   V=VEDAI_tune bash scripts/run_vedai_sweep.sh    # whole tune split, ~1 h per setting
+#   V=VEDAI_tune bash scripts/run_vedai_sweep.sh    # whole tune split, ~1-2 h per setting on CPU
 #   SWEEP=jitter V=VEDAI_tune_jitterL3W1 bash scripts/run_vedai_sweep.sh   # jittered-point settings
 #   SWEEP=holdout V=VEDAI_holdout bash scripts/run_vedai_sweep.sh       # final check, ~10 min per setting
 # Finished runs are skipped, so an interrupted sweep can be restarted.
@@ -14,7 +14,7 @@ if [ ! -f models/sam_vit_b.pth ]; then
   exit 1
 fi
 V=${V:-VEDAI_mini_test}
-IN=$V/mini_dataset
+IN=$V/input_dataset
 CAR_LENGTH=21   # median length of VEDAI car/van/pickup boxes
 
 SWEEP=${SWEEP:-boxsize}
@@ -39,7 +39,8 @@ elif [ "$SWEEP" = jitter ]; then
   # jittered and the exact-point set to see what jitter costs and what snap wins back.
   RUNS=(
     # Two-pass with its checks and --keep-axis-aligned (the correction head rotated real
-    # horizontal/vertical cars); listed first so they finish first overnight
+    # horizontal/vertical cars on the holdout); listed first so they finish first overnight.
+    # On the tune split (Oct 22) every *_keepaxis run gave the same labels as its pair without it
     "box_h7_hybrid_keepaxis|--box-half-size 7 --two-pass --keep-axis-aligned"
     "box_h7_hybrid_center_keepaxis|--box-half-size 7 --two-pass --center-on-point --keep-axis-aligned"
     "default|"
@@ -47,12 +48,13 @@ elif [ "$SWEEP" = jitter ]; then
     "box_h7|--box-prompt --box-half-size 7"
     "box_h7_snap|--box-prompt --box-half-size 7 --snap"
     "box_h7_dino_snap|--box-prompt --box-half-size 7 --features dino --snap"
-    # Centering on the label point raised mean IoU 0.59 -> 0.70 on exact points (offline test on
-    # the box_h7 run) but lowered it on jittered points; +2.5 px length helped both by ~0.02
+    # Centering on the label point: tune-split median IoU 0.603 -> 0.724 on exact points and
+    # 0.593 -> 0.659 with 3x1 px jitter (box_h7 -> box_h7_center); +2.5 px length fixes the
+    # 2 px short bias but scores about the same (0.723 / 0.673)
     "box_h7_center|--box-prompt --box-half-size 7 --center-on-point"
     "box_h7_center_grow|--box-prompt --box-half-size 7 --center-on-point --grow-length 2.5"
-    # The 14 px box cuts long cars short; --two-pass takes the length from a point-only mask
-    # (12-image sets: mean IoU 0.657 exact / 0.654 jitter vs 0.649 / 0.630 for box_h7)
+    # The 14 px box cuts long cars short; --two-pass takes the length from a point-only mask.
+    # Best on the tune split: box_h7_hybrid_center, median IoU 0.760 exact / 0.696 jitter
     "box_h7_hybrid|--box-half-size 7 --two-pass"
     "box_h7_hybrid_center|--box-half-size 7 --two-pass --center-on-point"
     "box_h7_keepaxis|--box-prompt --box-half-size 7 --keep-axis-aligned"
@@ -77,7 +79,7 @@ start=$SECONDS
 for entry in "${RUNS[@]}"; do
   name=${entry%%|*}
   opts=${entry#*|}
-  out=$V/mini_dataset_refined_$name
+  out=$V/input_dataset_refined_$name
   if [ ! -f "$out/refinement_report.csv" ]; then
     t=$SECONDS
     echo "=== $name: $opts"
