@@ -45,6 +45,7 @@ VALID_CAR_LENGTH = (0.5, 1.4)  # a box in this length range (with a car-like asp
 BAD_BOX_LENGTH = (8 / 30, 1.5) # correction head: a SAM box shorter or longer than this is resized
 DEFAULT_CAR_SIZE = (1.0, 0.5)  # correction head: length and width used when no clean car is in the image
 POINT_NUDGE = 4 / 30         # point prompt: the 4 extra points sit this far from the label point
+PLACEHOLDER_MIN_ASPECT = 1.3 # correction head: placeholder boxes squarer than this get a nearby car's size and angle
 
 def px(value):
     """Scales a pixel threshold tuned for COWC (~30px cars) to the dataset's CAR_LENGTH."""
@@ -228,9 +229,10 @@ def adjust_sam_box(yolo_obb, label_x, label_y, img_w, img_h):
 def geometric_correction_head(refined_labels, img_w, img_h, sources):
     """
     Post-processing for boxes that still look wrong. sources[i] is "sam" or "fallback" (the
-    input's placeholder box, kept because SAM's mask was rejected). A placeholder says nothing
-    about the car's shape, so it takes the nearest good SAM car's size and angle (and is left as
-    is when the image has none). A SAM box that is too long or too short takes that car's size
+    input's placeholder box, kept because SAM's mask was rejected). A roughly square placeholder
+    says nothing about the car's shape, so it takes the nearest good SAM car's size and angle; a
+    car-shaped placeholder, or any placeholder in an image with no good SAM car, is left as is.
+    A SAM box that is too long or too short takes that car's size
     but keeps its own center and direction. Only SAM boxes are used as donors.
     Returns (labels, was_corrected) where was_corrected[i] is True if box i was replaced.
     """
@@ -271,7 +273,10 @@ def geometric_correction_head(refined_labels, img_w, img_h, sources):
             nearest = valid_cars[int(np.argmin(distances))]
 
         if source == "fallback":
-            is_bad_box = nearest is not None
+            # A square placeholder (COWC's 32x32) says nothing about the car's shape or direction;
+            # a car-shaped one (VEDAI's 21x9, centered on the true box) is often already close, and
+            # copying a neighbour's angle turned correct horizontal cars by 90 degrees
+            is_bad_box = nearest is not None and max_dim / (min(w, h) + 1e-6) < PLACEHOLDER_MIN_ASPECT
         else:
             # Exactly horizontal/vertical SAM boxes are kept: real cars are often parked that way
             is_bad_box = not BAD_BOX_LENGTH[0] * CAR_LENGTH <= max_dim <= BAD_BOX_LENGTH[1] * CAR_LENGTH
