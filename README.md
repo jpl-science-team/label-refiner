@@ -403,6 +403,11 @@ Jitter barely changes the size errors; it lowers IoU by moving the box. True veh
 
 The holdout is at most 0.014 lower (median IoU 0.747 vs 0.761), so the setting isn't overfit to the tune split. Both splits use the current correction head, which keeps the SAM box's direction (on the tune split only the images with corrected boxes were rerun for it; the holdout was rerun in full). With 3 × 1 px jitter the holdout median IoU is 0.692 (mean 0.685).
 
+
+![VEDAI holdout tile 00000027_co: true boxes and box_h7_hybrid_center boxes](visuals/VEDAI_holdout_image.png)
+
+*VEDAI holdout tile `00000027_co` (13 vehicles, mean IoU 0.689) with `box_h7_hybrid_center`, from `data_exploration/truth_vs_run_html.py`. White: true box; green: refined box; yellow: refined box with IoU < 0.5; the number is each vehicle's IoU.*
+
 Findings:
 - **The box prompt** (`--box-prompt --box-half-size 7`, a 14 px box) beats the point prompt on both splits, but its boxes come out about 2 px short.
 - **`--two-pass`** fixes the length (median length error 0 px) without making boxes wider. With its checks, 3 of 239 holdout boxes are more than 20° off (box_h7 has 5).
