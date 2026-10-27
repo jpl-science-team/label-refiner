@@ -70,6 +70,8 @@ elif [ "$SWEEP" = holdout ]; then
     # angle from a nearly square box mask; --keep-axis-aligned and the two-pass checks fix that
     "box_h7_hybrid_keepaxis|--box-half-size 7 --two-pass --keep-axis-aligned"
     "box_h7_hybrid_center_keepaxis|--box-half-size 7 --two-pass --center-on-point --keep-axis-aligned"
+    # The recommended setting (best on the tune split; --keep-axis-aligned made no difference there)
+    "box_h7_hybrid_center|--box-half-size 7 --two-pass --center-on-point"
   )
 else
   echo "Unknown SWEEP=$SWEEP (use boxsize, jitter or holdout)"; exit 1

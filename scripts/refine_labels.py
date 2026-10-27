@@ -10,9 +10,9 @@ from pathlib import Path
 from tqdm import tqdm
 from segment_anything import sam_model_registry, SamPredictor
 
-# Pixel-scale settings, tuned for COWC 512px tiles with cars ~30px long. Every pixel threshold
-# (here and in the functions below) is scaled by CAR_LENGTH / BASE_CAR_LENGTH via px(), so set
-# CAR_LENGTH (or --car-length) to the typical car length of the dataset, e.g. 20 for VEDAI 512.
+# Pixel-scale settings, tuned for COWC 512px tiles with cars ~30px long. The px settings below are
+# scaled by CAR_LENGTH / BASE_CAR_LENGTH via px(), and the car-size limits are fractions of CAR_LENGTH,
+# so set CAR_LENGTH (or --car-length) to the typical car length of the dataset, e.g. 21 for VEDAI 512.
 # Snapping and the negative point are off by default: on the COWC mini dataset (accurate point
 # labels, ~8px similarity-map resolution) each slightly reduced the number of accepted SAM masks.
 USE_NEGATIVE_POINT = False  # add a PerSAM-style negative prompt from the similarity map
@@ -35,13 +35,24 @@ TWO_PASS = False            # also prompt with the point alone and take the leng
 GROW_LENGTH = 0.0           # add this many px to each SAM box's length (SAM masks tend to miss the car's ends)
 TWO_PASS_MAX_LENGTH = 48    # two-pass: a point mask longer than this (px) has bled into a neighbour; keep the box mask
 TWO_PASS_MIN_ASPECT = 1.5   # two-pass: a box mask squarer than this has no clear direction; use the point mask's angle
-CORRECT_AXIS_ALIGNED = True # correction head replaces exactly horizontal/vertical boxes (shadow bleeds on COWC)
 CAR_LENGTH = 30             # typical car length (px) in the dataset being refined
 BASE_CAR_LENGTH = 30        # car length the pixel thresholds were tuned at (COWC)
+
+# Car-size limits, as fractions of CAR_LENGTH (originally tuned in px for COWC's 30 px cars)
+MASK_MAX_LENGTH = 3.0       # a SAM mask longer than this is rejected outright (several cars, a building, ...)
+MASK_MIN_LENGTH = 0.2       # ... and so is one shorter than this (noise)
+VALID_CAR_LENGTH = (0.5, 1.4)  # a box in this length range (with a car-like aspect) counts as a clean single car
+BAD_BOX_LENGTH = (8 / 30, 1.5) # correction head: a SAM box shorter or longer than this is resized
+DEFAULT_CAR_SIZE = (1.0, 0.5)  # correction head: length and width used when no clean car is in the image
+POINT_NUDGE = 4 / 30         # point prompt: the 4 extra points sit this far from the label point
 
 def px(value):
     """Scales a pixel threshold tuned for COWC (~30px cars) to the dataset's CAR_LENGTH."""
     return value * CAR_LENGTH / BASE_CAR_LENGTH
+
+def is_valid_car(length, aspect):
+    """True for a box that looks like one clean car: length in VALID_CAR_LENGTH and a car-like aspect."""
+    return VALID_CAR_LENGTH[0] * CAR_LENGTH < length < VALID_CAR_LENGTH[1] * CAR_LENGTH and 1.3 < aspect < 3.2
 
 # ---------------------------------------------------------
 # 1. PerSAM Visual Weights Extractor
@@ -174,10 +185,10 @@ def mask_to_yolo_obb(mask, img_w, img_h):
     # ---------------------------------------------------------
     # DEFENSIVE FILTERING: Stop massive hallucinations & noise
     # ---------------------------------------------------------
-    if max_dimension > px(90):
+    if max_dimension > MASK_MAX_LENGTH * CAR_LENGTH:
         return None
 
-    if max_dimension < px(6):
+    if max_dimension < MASK_MIN_LENGTH * CAR_LENGTH:
         return None
         
     aspect_ratio = max_dimension / (min_dimension + 1e-6)
@@ -214,10 +225,13 @@ def adjust_sam_box(yolo_obb, label_x, label_y, img_w, img_h):
 # ---------------------------------------------------------
 # 3. Post-Processing Geometric Correction Head
 # ---------------------------------------------------------
-def geometric_correction_head(refined_labels, img_w, img_h):
+def geometric_correction_head(refined_labels, img_w, img_h, sources):
     """
-    STRICT POST-PROCESSING HEAD: Resolves remaining edge case failures 
-    by targeting axis-aligned bleeding boxes in building shadows.
+    Post-processing for boxes that still look wrong. sources[i] is "sam" or "fallback" (the
+    input's placeholder box, kept because SAM's mask was rejected). A placeholder says nothing
+    about the car's shape, so it takes the nearest good SAM car's size and angle (and is left as
+    is when the image has none). A SAM box that is too long or too short takes that car's size
+    but keeps its own center and direction. Only SAM boxes are used as donors.
     Returns (labels, was_corrected) where was_corrected[i] is True if box i was replaced.
     """
     if len(refined_labels) == 0:
@@ -227,7 +241,7 @@ def geometric_correction_head(refined_labels, img_w, img_h):
     was_corrected = []
     valid_cars = []
 
-    for label in refined_labels:
+    for label, source in zip(refined_labels, sources):
         cls_id = label[0]
         pts = np.array(label[1:]).reshape(4, 2)
         
@@ -237,7 +251,7 @@ def geometric_correction_head(refined_labels, img_w, img_h):
         min_dim = min(w, h)
         aspect = max_dim / (min_dim + 1e-6)
 
-        if px(15) < max_dim < px(42) and 1.3 < aspect < 3.2 and angle != 0.0:
+        if source == "sam" and is_valid_car(max_dim, aspect):
             valid_cars.append({
                 'center': (cx, cy),
                 'size': (w, h),
@@ -245,24 +259,37 @@ def geometric_correction_head(refined_labels, img_w, img_h):
                 'raw_label': label
             })
 
-    for label in refined_labels:
+    for label, source in zip(refined_labels, sources):
         cls_id = label[0]
         pts = np.array(label[1:]).reshape(4, 2)
         rect = cv2.minAreaRect((pts * np.array([img_w, img_h])).astype(np.float32))
         (cx, cy), (w, h), angle = rect
         max_dim = max(w, h)
-        
-        is_bad_box = max_dim > px(45) or max_dim < px(8) or (CORRECT_AXIS_ALIGNED and angle in (0.0, 90.0))
+        nearest = None
+        if valid_cars:
+            distances = [np.linalg.norm(np.array((cx, cy)) - np.array(vc['center'])) for vc in valid_cars]
+            nearest = valid_cars[int(np.argmin(distances))]
+
+        if source == "fallback":
+            is_bad_box = nearest is not None
+        else:
+            # Exactly horizontal/vertical SAM boxes are kept: real cars are often parked that way
+            is_bad_box = not BAD_BOX_LENGTH[0] * CAR_LENGTH <= max_dim <= BAD_BOX_LENGTH[1] * CAR_LENGTH
 
         if is_bad_box:
-            if len(valid_cars) > 0:
-                distances = [np.linalg.norm(np.array((cx, cy)) - np.array(vc['center'])) for vc in valid_cars]
-                closest_car = valid_cars[np.argmin(distances)]
-                matched_w, matched_h = closest_car['size']
-                matched_angle = closest_car['angle']
+            if source == "fallback":
+                # Placeholder: copy the nearest good car's size and angle
+                (matched_w, matched_h), matched_angle = nearest['size'], nearest['angle']
             else:
-                matched_w, matched_h = px(30.0), px(15.0)
-                matched_angle = 0.0
+                # SAM box: nearest good car's size (placeholder size if none), but the SAM box's own
+                # direction, turned so the long side follows its long axis (copying the other car's
+                # angle, or angle 0 with no car, often turned cars 90 degrees)
+                if nearest is not None:
+                    long_side, short_side = sorted(nearest['size'], reverse=True)
+                else:
+                    long_side, short_side = DEFAULT_CAR_SIZE[0] * CAR_LENGTH, DEFAULT_CAR_SIZE[1] * CAR_LENGTH
+                matched_w, matched_h = (long_side, short_side) if w >= h else (short_side, long_side)
+                matched_angle = angle
             
             corrected_rect = ((cx, cy), (matched_w, matched_h), matched_angle)
             box_points = cv2.boxPoints(corrected_rect)
@@ -340,7 +367,7 @@ def sam_mask(predictor, x, y, box=None, neg_point=None, similarity_map=None):
         input_labels = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0])
         input_box = np.array([[x1, y1, x2, y2]])
     else:
-        nudge = px(4)
+        nudge = POINT_NUDGE * CAR_LENGTH
         input_points = np.array([[x, y], [x - nudge, y], [x + nudge, y], [x, y - nudge], [x, y + nudge]])
         input_labels = np.array([1, 1, 1, 1, 1])
         input_box = None
@@ -493,7 +520,7 @@ def refine_folder(in_dir, out_dir, predictor, target_weight, dino=None, desc="Pr
 
             refined_labels.append([int(cls_id)] + yolo_obb)
 
-        final_clean_labels, was_corrected = geometric_correction_head(refined_labels, img_w, img_h)
+        final_clean_labels, was_corrected = geometric_correction_head(refined_labels, img_w, img_h, sources)
 
         out_lbl_path = out_lbl_dir / (Path(img_name).stem + ".txt")
         with open(out_lbl_path, "w") as f:
@@ -597,7 +624,7 @@ def build_reference_from_tile(predictor, img, points):
         aspect = max(w, h) / (min(w, h) + 1e-6)
         # Same single-car criteria as the correction head's "valid car" check, so merged
         # blobs of several cars + shadow don't leak asphalt into the signature
-        if px(15) < max(w, h) < px(42) and 1.3 < aspect < 3.2:
+        if is_valid_car(max(w, h), aspect):
             cv2.drawContours(ref_mask, [cnt], -1, 255, cv2.FILLED)
             used += 1
     if used == 0:
@@ -651,8 +678,9 @@ def load_reference_crop(predictor, ref_img_path, ref_mask_path=None, scale=None)
     contours, _ = cv2.findContours((mask > 127).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     length = max(cv2.minAreaRect(max(contours, key=cv2.contourArea))[1]) if contours else 0
     print(f"Reference crop: {ref_img_path} scaled x{scale:.3g} to {w}x{h}px, car mask {length:.0f}px long")
-    if not px(15) < length < px(42):
-        print(f"[WARNING] Reference car mask is outside the expected {px(15):.0f}-{px(42):.0f}px car length; "
+    lo, hi = (f * CAR_LENGTH for f in VALID_CAR_LENGTH)
+    if not lo < length < hi:
+        print(f"[WARNING] Reference car mask is outside the expected {lo:.0f}-{hi:.0f}px car length; "
               "check reference_mask.png in the output folder, or set --ref-scale / --ref-mask")
     return canvas, mask
 
@@ -756,8 +784,8 @@ if __name__ == "__main__":
                         help="Prompt SAM with the box and with the point alone; keep the box mask's width, "
                              "center and angle and the point mask's length (uses --box-half-size)")
     parser.add_argument("--keep-axis-aligned", action="store_true",
-                        help="Don't let the correction head replace exactly horizontal/vertical boxes "
-                             "(on VEDAI many cars are parked that way; on COWC such boxes were mostly shadow bleeds)")
+                        help="No effect (kept so older commands still run): the correction head now never "
+                             "replaces SAM boxes for being exactly horizontal/vertical")
     parser.add_argument("--pick-mask", choices=["sam", "sim"], default=None,
                         help="Ask SAM for 3 candidate masks and keep the best: sam = SAM's own score, "
                              "sim = most car-like inside vs. a ring around it (similarity map; DINOv2 with --features dino)")
@@ -775,14 +803,12 @@ if __name__ == "__main__":
     CENTER_ON_POINT = CENTER_ON_POINT or args.center_on_point
     TWO_PASS = TWO_PASS or args.two_pass
     PICK_MASK = PICK_MASK or args.pick_mask
-    CORRECT_AXIS_ALIGNED = CORRECT_AXIS_ALIGNED and not args.keep_axis_aligned
     if args.grow_length is not None:
         GROW_LENGTH = args.grow_length * BASE_CAR_LENGTH / CAR_LENGTH  # unscaled, as for BOX_HALF_SIZE
     print(f"Car length {CAR_LENGTH:g}px: pixel thresholds scaled x{CAR_LENGTH / BASE_CAR_LENGTH:.3g}"
           + (f", box prompt {2 * px(BOX_HALF_SIZE):.0f}px" if USE_BOX_PROMPT or TWO_PASS else "")
           + (", two-pass (point-mask length)" if TWO_PASS else "")
           + (f", mask picked by {PICK_MASK}" if PICK_MASK else "")
-          + ("" if CORRECT_AXIS_ALIGNED else ", axis-aligned boxes kept")
           + (", SAM boxes centered on label points" if CENTER_ON_POINT else "")
           + (f", SAM boxes +{px(GROW_LENGTH):g}px long" if GROW_LENGTH else ""))
 

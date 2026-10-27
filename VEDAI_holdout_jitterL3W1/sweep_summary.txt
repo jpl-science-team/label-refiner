@@ -1,8 +1,19 @@
 VEDAI_holdout_jitterL3W1: 239 vehicles, sorted by mean IoU
-run              meanIoU  median  >=0.5  >=0.7   dLen   dWid  angle   sam/corr/fallback/unmatched
--------------------------------------------------------------------------------------------------
-box_h7_hybrid_center_keepaxis   0.681   0.692    93%    46%   +0.1   +0.0    2.7   235/4/0/0
-box_h7_center      0.644   0.659    88%    36%   -2.2   +0.0    2.7   232/2/5/0
-box_h7_hybrid_keepaxis   0.597   0.607    82%    17%   +0.1   +0.0    2.7   235/3/0/1
-box_h7             0.578   0.590    75%    16%   -2.2   +0.0    2.7   232/1/5/1
-default            0.548   0.578    73%    12%   +0.2   +1.5    2.2   221/11/4/3
+run                             meanIoU  median  >=0.5  >=0.7   dLen   dWid  angle   sam/corr/fallback/unmatched
+----------------------------------------------------------------------------------------------------------------
+box_h7_hybrid_center              0.685   0.692    94%    46%   +0.1   +0.0    2.7   235/4/0/0
+box_h7_hybrid_center_keepaxis     0.685   0.692    94%    46%   +0.1   +0.0    2.7   235/4/0/0
+box_h7_center                     0.646   0.659    88%    36%   -2.2   +0.0    2.7   232/2/5/0
+box_h7_hybrid_keepaxis            0.600   0.611    83%    17%   +0.1   +0.0    2.7   235/3/0/1
+box_h7                            0.579   0.590    75%    16%   -2.2   +0.0    2.7   232/1/5/1
+default                           0.550   0.579    73%    12%   +0.2   +1.5    2.2   221/12/4/2
+
+Length/width errors (refined - true, px; matched boxes): median (dLen/dWid), mean absolute (MAE), 90th percentile of |error|, share within 2 px (length) / 1 px (width), mean |error| / true size
+run                             matched |  dLen   MAE   p90  <=2px   rel |  dWid   MAE   p90  <=1px   rel
+---------------------------------------------------------------------------------------------------------
+box_h7_hybrid_center                239 |  +0.1  2.18   5.0    60%   10% |  +0.0  1.43   3.0    48%   18%
+box_h7_hybrid_center_keepaxis       239 |  +0.1  2.18   5.0    60%   10% |  +0.0  1.43   3.0    48%   18%
+box_h7_center                       239 |  -2.2  4.03   9.5    41%   18% |  +0.0  1.36   3.0    50%   17%
+box_h7_hybrid_keepaxis              238 |  +0.1  2.16   4.8    60%   10% |  +0.0  1.43   3.0    49%   17%
+box_h7                              238 |  -2.2  4.02   9.5    42%   17% |  +0.0  1.36   3.0    51%   17%
+default                             237 |  +0.2  1.99   4.5    62%    9% |  +1.5  2.28   4.8    33%   28%
