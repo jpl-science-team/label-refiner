@@ -9,8 +9,8 @@ RUN_DIR/evaluation_all_fold01.csv when present). Rows are sorted by the first ru
 
 Example (from the repo root):
   python data_exploration/vehicle_crops_html.py --set VEDAI_mini_test \
-      --run box_h7=VEDAI_mini_test/mini_dataset_refined_box_h7 \
-      --run two_pass=VEDAI_mini_test/mini_dataset_refined_box_h7_hybrid \
+      --run box_h7=VEDAI_mini_test/input_dataset_refined_box_h7 \
+      --run two_pass=VEDAI_mini_test/input_dataset_refined_box_h7_hybrid \
       --out VEDAI_mini_test/crops.html
 View it like compare_plots_html.py's pages (python -m http.server 8765 --bind 127.0.0.1).
 """
@@ -58,7 +58,7 @@ def draw_crop(img, c, truth_box, pred_box, point):
 
 def main():
     parser = argparse.ArgumentParser(description="Zoomed per-vehicle crops comparing refinement runs.")
-    parser.add_argument("--set", required=True, help="Subset dir from make_vedai_subset.py (mini_dataset/, truth/labels)")
+    parser.add_argument("--set", required=True, help="Subset dir from make_vedai_subset.py (input_dataset/, truth/labels)")
     parser.add_argument("--run", action="append", required=True, help="NAME=RUN_DIR (repeatable, shown left to right)")
     parser.add_argument("--out", required=True, help="HTML page to write; crops go to <out stem>_crops/")
     args = parser.parse_args()
@@ -72,10 +72,10 @@ def main():
     rows = []
     for truth_path in sorted((vset / "truth/labels").glob("*.txt")):
         stem = truth_path.stem
-        img = cv2.imread(str(next((vset / "mini_dataset/images").glob(f"{stem}.*"))))
+        img = cv2.imread(str(next((vset / "input_dataset/images").glob(f"{stem}.*"))))
         h, w = img.shape[:2]
         truth = load_obbs(truth_path, w, h)
-        pts_rows = [l.split() for l in (vset / "mini_dataset/labels" / f"{stem}.txt").read_text().splitlines() if l.strip()]
+        pts_rows = [l.split() for l in (vset / "input_dataset/labels" / f"{stem}.txt").read_text().splitlines() if l.strip()]
         points = [np.array([float(r[1]) * w, float(r[2]) * h]) for r in pts_rows]
         preds = {n: load_obbs(d / "labels" / f"{stem}.txt", w, h) for n, d in runs}
         for i, t in enumerate(truth):

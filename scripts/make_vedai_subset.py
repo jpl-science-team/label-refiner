@@ -3,7 +3,7 @@
 Builds a small VEDAI test set for refine_labels.py sweeps, from the output of
 VS_VEDAI_Separation_Conversion.py:
 
-  <out>/mini_dataset/{images,labels}   center-point input (copied)
+  <out>/input_dataset/{images,labels}   center-point input (copied)
   <out>/truth/labels                   true OBB labels for the same images
   <out>/truth/plots                    truth drawn over the images (for compare_plots_html.py)
   <out>/image_list.txt                 the image names used
@@ -117,28 +117,28 @@ def main():
         stems = sorted(rng.sample([s for s in tune if has_vehicles(s)], args.n_with)
                        + rng.sample([s for s in tune if not has_vehicles(s)], args.n_empty))
 
-    for d in ("mini_dataset/images", "mini_dataset/labels", "truth/labels"):
+    for d in ("input_dataset/images", "input_dataset/labels", "truth/labels"):
         (out / d).mkdir(parents=True, exist_ok=True)
     n_vehicles = 0
     jitter_rng = random.Random(args.jitter_seed)
     for s in stems:
         img = next((src / "images").glob(f"{s}.*"))
-        shutil.copy(img, out / "mini_dataset/images" / img.name)
+        shutil.copy(img, out / "input_dataset/images" / img.name)
         points = (src / "labels" / f"{s}.txt").read_text()
         if args.jitter > 0:
             points = jitter_labels(points, args.jitter, jitter_rng)
         elif directional:
             points = jitter_labels(points, 0, jitter_rng, (truth / f"{s}.txt").read_text(),
                                    args.jitter_length, args.jitter_width)
-        (out / "mini_dataset/labels" / f"{s}.txt").write_text(points)
+        (out / "input_dataset/labels" / f"{s}.txt").write_text(points)
         shutil.copy(truth / f"{s}.txt", out / "truth/labels" / f"{s}.txt")
         n_vehicles += len((truth / f"{s}.txt").read_text().splitlines())
     if not args.list or Path(args.list).resolve() != (out / "image_list.txt").resolve():
         (out / "image_list.txt").write_text("\n".join(stems) + "\n")
 
     subprocess.run([sys.executable, "data_exploration/plot_obb_labels.py",
-                    "--images", str(out / "mini_dataset/images"), "--labels", str(out / "truth/labels"),
-                    "--input-labels", str(out / "mini_dataset/labels"), "--out", str(out / "truth/plots")],
+                    "--images", str(out / "input_dataset/images"), "--labels", str(out / "truth/labels"),
+                    "--input-labels", str(out / "input_dataset/labels"), "--out", str(out / "truth/plots")],
                    check=True, stdout=subprocess.DEVNULL)
     print(f"{out}: {len(stems)} images, {n_vehicles} vehicles "
           + (f"(holdout fold{args.fold:02d} only)" if args.holdout else f"(holdout fold{args.fold:02d} excluded)")

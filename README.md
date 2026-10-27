@@ -157,9 +157,9 @@ python scripts/make_cowc_subset.py    # reads COWC_mini_test/image_list.txt, wri
 python scripts/refine_labels.py --input COWC_mini_test/mini_dataset --output COWC_mini_test/mini_dataset_refined_box \
     --ref datasets/COWC_Points_512/ref_car.png --box-prompt
 
-# Example for VEDAI (best on the VEDAI holdout set, see "Tuning on VEDAI"; will be updated after the full tune-split run)
+# Example for VEDAI (box_h7_hybrid_center: best on the VEDAI tune split, see "Tuning on VEDAI")
 python scripts/refine_labels.py --input datasets/vedai_512/vedai_color_centerpoint --output datasets_refined/vedai_color \
-    --car-length 21 --box-half-size 7 --two-pass --center-on-point --keep-axis-aligned
+    --car-length 21 --box-half-size 7 --two-pass --center-on-point
 ```
 This takes about 3 s per image on CPU.
 
@@ -171,9 +171,18 @@ for run in "default|" "box|--box-prompt" "two_pass|--two-pass"; do
       --ref datasets/COWC_Points_512/ref_car.png $opts
 done
 ```
-The VEDAI command uses `--center-on-point`, which only suits points on the car's center line (VEDAI's are exact box centers). For hand-clicked points that may be off to the side, drop it (`--box-half-size 7 --two-pass --keep-axis-aligned`).
+The VEDAI command uses `--center-on-point`, which centers each box on its label point. That works when the points lie on the car's center line: VEDAI's are exact box centers, and with points up to 3 px along and 1 px across the car it was still the best setting (tune-split median IoU 0.696). If your points can be several px off to the side of the car (with points up to 4 px off in any direction it scored below the default), leave `--center-on-point` out:
+```bash
+python scripts/refine_labels.py --input datasets/vedai_512/vedai_color_centerpoint --output datasets_refined/vedai_color \
+    --car-length 21 --box-half-size 7 --two-pass
+```
+(`--keep-axis-aligned`, used in some older commands below, no longer has any effect.)
 
-For each labeled point, SAM segments the car (by default prompted with the point plus 4 points 4 px up, down, left and right, scaled by `--car-length`, as in Option B), the mask's minimum-area rectangle becomes the OBB, and masks that are too big, too small or the wrong shape are rejected (the placeholder box is kept instead). A geometric correction head then replaces boxes that still look wrong with a nearby car's size and angle.
+For each labeled point, SAM segments the car (by default prompted with the point plus 4 points 4 px up, down, left and right, scaled by `--car-length`, as in Option B), the mask's minimum-area rectangle becomes the OBB, and masks that are too big, too small or the wrong shape are rejected (the placeholder box is kept instead). A geometric correction head then fixes boxes that still look wrong, using the nearest good SAM box in the image. A SAM box that is too long or too short gets that car's size but keeps its own center and direction. A placeholder that is roughly square (like COWC's 32 × 32) carries no shape, so it gets that car's size and angle; a car-shaped placeholder (like VEDAI's 21 × 9, centered on the true box) is kept. Exactly horizontal or vertical SAM boxes are no longer replaced, since real cars are often parked that way (`--keep-axis-aligned` is kept only so older commands still run).
+
+![COWC tile Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_1792: two-pass and default, old vs new correction head](visuals/COWC_Columbus_1792.png)
+
+*COWC tile `Columbus_CSUAV_AFRL_EO_Run01_s2_301_15_00_31.99319028-Oct-2007_11-00-31.993_Frame_1-124%_patch_768_1792`: two-pass and default settings, before and after the correction head change. Green: SAM box; cyan: replaced by the correction head; orange: fallback placeholder. The square 32 × 32 placeholders (orange) now take a nearby car's size and angle (cyan): default goes from 5 fallback boxes to 0, two-pass from 1 to 0.*
 
 The reference (`--ref`) is only used for the similarity score in the report (and by `--snap`, `--negative` and `--pick-mask sim`, which are off by default). It should be a tight crop of one car from the same kind of imagery. If the crop was enlarged (e.g. a 30 px car saved at 300 px), the script detects this and shrinks it back, then segments the car with SAM. Without `--ref`, the script uses `<input>/ref_car.png` if it exists, otherwise it builds the reference from the input image with the most labels (skipping cars that touch the image edge).
 
@@ -195,7 +204,7 @@ Useful options:
 | `--box-prompt` | Prompt SAM with a box around each car (36 px at the default car length, i.e. 1.2 × `--car-length`) plus a ring of negative points just outside it (as in `VS_PerSAM_DINOv2.py`). Stops masks bleeding into neighbouring cars and shadows |
 | `--box-half-size 18` | Set the box prompt half-width in pixels directly instead of scaling it from `--car-length` (7 works best on VEDAI) |
 | `--two-pass` | Prompt SAM twice per car, with the box prompt and with the point alone, and keep the box mask's center, width and angle with the point mask's length: the square box prompt cuts long cars short, and point-only masks come out too wide. If the box mask is nearly square (only part of the car, so no clear direction), the point mask's center and angle are used; if the point mask is longer than 1.6 × `--car-length` (bled into a neighbour or shadow), the box mask is kept unchanged. Uses `--box-half-size` (`--box-prompt` not needed). The image is encoded once, but SAM's mask decoder runs twice per car |
-| `--keep-axis-aligned` | Don't let the correction head replace boxes that are exactly horizontal or vertical. On COWC those were mostly masks bleeding into building shadows; on VEDAI many cars are parked that way and the head was rotating correct boxes by 90° (with `--two-pass` it fired on 14 of 239 holdout vehicles, 3 with this option) |
+| `--keep-axis-aligned` | No effect, kept so older commands still run. The correction head used to replace exactly horizontal or vertical boxes (meant for shadow bleeds on COWC), which rotated correctly parked VEDAI cars; it now picks boxes to fix by whether they are SAM boxes or placeholders instead |
 | `--center-on-point` | Center each SAM box on its label point instead of the mask's center. Only helps when the points are exact box centers (VEDAI's are); with hand-clicked points it makes boxes worse (see "Tuning on VEDAI"). It uses the original label point, so it undoes `--snap` |
 | `--grow-length 2.5` | Add this many pixels to each SAM box's length (given directly in pixels, like `--box-half-size`) |
 | `--ref PATH` | Reference car crop (default: `<input>/ref_car.png` if present) |
@@ -223,7 +232,7 @@ Results on the COWC mini dataset (65 cars; "sam" = box from an accepted SAM mask
 
 **DINOv2 and the reference:** DINOv2 only works well with a reference *tile* (a real dataset image), not a hand-cropped car. On the COWC mini dataset, the `ref_car.png` crop gave DINOv2 almost no car-vs-background contrast, because DINOv2 features depend on the car's surroundings. When using `--features dino`, leave out `--ref` (and make sure there's no `ref_car.png` in the input folder) or pass `--ref-tile`.
 
-**Car size:** the pixel thresholds were tuned for COWC (cars about 30 px long). They scale with `--car-length`: the mask size filter (6–90 px), the correction head's valid-car range (15–42 px), the `--box-prompt` box, the two-pass length limit (48 px), the `--snap` radius and the `--negative` exclusion radius. Aspect-ratio limits don't depend on scale and stay fixed. Set `--car-length` to the median car length of your data. The script prints the scale factor it is using.
+**Car size:** the size thresholds were tuned for COWC (cars about 30 px long) and scale with `--car-length`. The car-size limits at the top of `refine_labels.py` are fractions of the car length: SAM masks are rejected outside 0.2–3 × (`MASK_MIN_LENGTH`, `MASK_MAX_LENGTH`), a clean car is 0.5–1.4 × (`VALID_CAR_LENGTH`), and the correction head resizes SAM boxes outside 8/30–1.5 × (`BAD_BOX_LENGTH`). The other px settings (the `--box-prompt` box, the two-pass length limit of 48 px, the `--snap` radius and the `--negative` exclusion radius) are scaled from their COWC values by `px()`. Aspect-ratio limits don't depend on scale and stay fixed. Set `--car-length` to the median car length of your data. The script prints the scale factor it is using.
 
 ### DINOv2 files (only for `--features dino`)
 The script loads DINOv2 from local files, so no internet access is needed when it runs. These files are in `.gitignore`, so download them yourself (or from the Google Drive in Setup step 4):
@@ -272,7 +281,7 @@ Then open http://localhost:8765/COWC_mini_test/mini_compare.html in your browser
 
 VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored against them. Only car-sized classes are used: car, van and pickup (VEDAI classes 1, 9, 11). A typical vehicle is 21 × 9 px (median of the true boxes in the 512 px tiles; 10–90% range 18–25 × 7–10 px). Trucks, camping cars and tractors are larger and would need their own size settings.
 
-**Holdout:** VEDAI's official `fold01test.txt` (121 images, 239 vehicles) is the holdout set and is never used for tuning. The tune split is the other 1,125 images (2,194 vehicles). Compare settings on the tune split, then check the final settings once on the holdout so the parameters aren't overfit.
+**Holdout:** VEDAI's official `fold01test.txt` (121 images, 239 vehicles) is the holdout set and is never used for tuning. The tune split is the other 1,125 images (2,194 vehicles). There is no separate split folder: all 1,246 converted images stay together in `datasets/vedai_512/vedai_color_centerpoint/`, and `make_vedai_subset.py` reads `data/VEDAI/Annotations512/fold01test.txt` each time to copy either the tune images (`--all`, `--list`) or the holdout images (`--holdout`) into a test set, with the names it used in `<set>/image_list.txt`. Compare settings on the tune split, then check the final settings once on the holdout so the parameters aren't overfit.
 
 **Exact and jittered points:** VEDAI's input points are the exact centers of the true boxes, which hand-clicked labels aren't. Each test set can be built a second time with jittered points: `make_vedai_subset.py --jitter-length 3 --jitter-width 1` moves each point by a random offset of up to 3 px along its vehicle and 1 px across it (uniform over an ellipse aligned with the true box, fixed seed), leaving the truth unchanged. Every setting is scored on both. (`--jitter R` moves points up to R px in any direction; an earlier study used 4 px, but 4 px sideways is almost half a car's width.)
 
@@ -288,7 +297,7 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
    python scripts/make_vedai_subset.py --out VEDAI_mini_jitterL3W1 --list VEDAI_mini_test/image_list.txt \
        --jitter-length 3 --jitter-width 1
    ```
-   Each set has `mini_dataset/` (input), `truth/labels` and `truth/plots`. Use `--n-with N --n-empty M --seed S` instead of `--list` to sample a different set.
+   Each set has `input_dataset/` (the set's full input: images and point labels, however many images the set has), `truth/labels` and `truth/plots`; each run writes `<set>/input_dataset_refined_<setting>/`. Use `--n-with N --n-empty M --seed S` instead of `--list` to sample a different set.
 
 3. **Run a sweep**, then summarize it. `scripts/run_vedai_sweep.sh` runs `refine_labels.py` with `--car-length 21` for each setting in one of its lists (`SWEEP=boxsize`, the default: box half-sizes 6–14 px; `SWEEP=jitter`: the settings below; `SWEEP=holdout`: the final candidates), scores each run and draws its plots. `V=` picks the test set. Finished runs are skipped, so an interrupted sweep can be restarted:
    ```bash
@@ -297,9 +306,9 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
    V=VEDAI_mini_test python scripts/summarize_vedai_sweep.py
    V=VEDAI_mini_jitterL3W1 python scripts/summarize_vedai_sweep.py
    ```
-   The summary writes `<set>/sweep_summary.txt` (one row per setting, sorted by mean IoU) and `<set>/mini_compare.html` (the true boxes, then each run from best to worst; view it as in step 5 above). Set `PY=/path/to/python` if `python` isn't the label-refiner env.
+   The summary writes `<set>/sweep_summary.txt` (one row per setting, sorted by mean IoU, then a second table of length and width errors: median, mean absolute, 90th percentile, share within 2 px / 1 px, and error relative to the true size) and `<set>/mini_compare.html` (the true boxes, then each run from best to worst; view it as in step 5 above). Set `PY=/path/to/python` if `python` isn't the label-refiner env.
 
-4. **Overnight: the whole tune split.** `scripts/run_vedai_jitter_overnight.sh` builds `VEDAI_tune` (exact points) and `VEDAI_tune_jitterL3W1`, runs `SWEEP=jitter` on both at once (about 2.3 h per setting on 32 CPUs, 3.3 h for DINOv2) and summarizes them. Start it in tmux so it keeps running after you log out:
+4. **Overnight: the whole tune split.** `scripts/run_vedai_jitter_overnight.sh` builds `VEDAI_tune` (exact points) and `VEDAI_tune_jitterL3W1`, runs `SWEEP=jitter` on both at once and summarizes them. On analysis.jpl.nasa.gov (CPU only) each setting took about 1–2 h with both sets running, and the whole 12-setting sweep about 15.5 h. Start it in tmux so it keeps running after you log out:
    ```bash
    tmux new -d -s sweep 'cd ~/label-refiner && conda run -n label-refiner bash scripts/run_vedai_jitter_overnight.sh > VEDAI_jitter_overnight.log 2>&1'
    ```
@@ -319,18 +328,23 @@ VEDAI has hand-drawn vehicle outlines, so refinement settings can be scored agai
 6. **Look at individual vehicles.** Full-tile plots are too small to judge a 20 px car. `data_exploration/vehicle_crops_html.py` makes a page with one row per true vehicle and one column per run: a 48 px crop enlarged 5×, with the true box in white, the run's box in green and the input point in red, worst IoU (of the first run) first:
    ```bash
    python data_exploration/vehicle_crops_html.py --set VEDAI_holdout \
-       --run two_pass=VEDAI_holdout/mini_dataset_refined_box_h7_hybrid_keepaxis \
-       --run box_h7=VEDAI_holdout/mini_dataset_refined_box_h7 \
-       --run default=VEDAI_holdout/mini_dataset_refined_default \
+       --run two_pass=VEDAI_holdout/input_dataset_refined_box_h7_hybrid_keepaxis \
+       --run box_h7=VEDAI_holdout/input_dataset_refined_box_h7 \
+       --run default=VEDAI_holdout/input_dataset_refined_default \
        --out VEDAI_holdout/crops.html
    ```
    It writes the crops to `VEDAI_holdout/crops_crops/`. View it like the comparison page (step 5 of Option 0).
 
 **What the scores mean** (`scripts/evaluate_updated_vedai_labels.py`): each true vehicle is matched to one refined box by oriented IoU. The script reports mean and median IoU (unmatched vehicles count as 0), the share of vehicles at IoU ≥ 0.5 and ≥ 0.7, and median length, width and angle errors (refined minus true, in px), overall and per `source` (sam / corrected / fallback). `--split tune|holdout|all` picks the images, `--truth` the truth labels, and `--fold N` another holdout fold. Results go to `evaluation_<split>_fold01.txt` and a per-vehicle `.csv` in the run folder.
 
-### Results so far
+### Results
 
-All runs use `--car-length 21`; numbers are from the `evaluation_all_fold01.csv` files behind each `sweep_summary.txt`. All values are medians over the true vehicles: IoU (a vehicle with no matching box counts as 0), and the absolute length and width difference between the refined and true box in px. A typical vehicle is 21 × 9 px. The signed median shows the bias: box_h7 and box_h7_center boxes are 2.2 px too short, default boxes 1.5 px too wide, and the two-pass settings are unbiased (within 0.1 px). **Baseline:** plain 21 × 9 px boxes centered on the points (no SAM) score a mean IoU of 0.47 on the tune split (these earlier comparisons are mean IoU) (39% of vehicles at IoU ≥ 0.5); a setting should beat that.
+All runs use `--car-length 21` on the color images, and are scored on two splits of VEDAI's 1,246 images:
+
+- **Tune split:** the 1,125 images (2,194 vehicles) not in `fold01test.txt`, in `VEDAI_tune/` (exact points) and `VEDAI_tune_jitterL3W1/` (3 × 1 px jitter). All settings were compared here.
+- **Holdout:** the 121 images (239 vehicles) in `fold01test.txt`, in `VEDAI_holdout/` and `VEDAI_holdout_jitterL3W1/`. Only the main candidates were run here, once, as a final check.
+
+The numbers come from the `evaluation_all_fold01.csv` files behind each set's `sweep_summary.txt` (which also has the means). IoU is the median over the true vehicles; a vehicle with no matching box counts as 0. Length and width errors are refined minus true box, in px, and each table says how it summarizes them. A typical vehicle is 21 × 9 px. **Baseline:** plain 21 × 9 px boxes centered on the points (no SAM) score a mean IoU of 0.47 on the tune split, with 39% of vehicles at IoU ≥ 0.5; a setting should beat that.
 
 | Setting | Options |
 |---|---|
@@ -339,22 +353,59 @@ All runs use `--car-length 21`; numbers are from the `evaluation_all_fold01.csv`
 | box_h7_center | `--box-prompt --box-half-size 7 --center-on-point` |
 | box_h7_hybrid_keepaxis | `--box-half-size 7 --two-pass --keep-axis-aligned` |
 | box_h7_hybrid_center_keepaxis | `--box-half-size 7 --two-pass --center-on-point --keep-axis-aligned` |
+| box_h7_hybrid, box_h7_hybrid_center | as the two above, without `--keep-axis-aligned` |
+| box_h7_center_grow | `--box-prompt --box-half-size 7 --center-on-point --grow-length 2.5` |
+| default_snap | `--snap` |
+| box_h7_snap | `--box-prompt --box-half-size 7 --snap` |
+| box_h7_dino_snap | `--box-prompt --box-half-size 7 --features dino --snap` |
 
-Holdout (239 vehicles):
+**Tune split** (1,125 images, 2,194 vehicles; full tables in `VEDAI_tune/sweep_summary.txt` and `VEDAI_tune_jitterL3W1/sweep_summary.txt`). The length and width columns are signed median error / mean absolute error in px, then the share of vehicles within 2 px (length) or 1 px (width). The `keepaxis` settings are left out: they gave exactly the same labels as their pairs without it, on the tune split and on the holdout.
+
+| Setting | Exact: IoU | IoU ≥ 0.7 | Length (px) | ≤ 2 px | Width (px) | ≤ 1 px | 3 × 1 jitter: IoU | IoU ≥ 0.7 | Length (px) | Width (px) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| box_h7_hybrid_center | **0.761** | **69%** | +0.5 / 2.2 | 61% | +0.2 / 1.4 | 47% | **0.697** | **49%** | +0.5 / 2.2 | +0.1 / 1.4 |
+| box_h7_center_grow | 0.723 | 57% | +0.5 / 3.2 | 43% | +0.1 / 1.4 | 48% | 0.673 | 39% | +0.2 / 3.4 | +0.1 / 1.4 |
+| box_h7_center | 0.724 | 57% | −2.0 / 3.8 | 44% | +0.1 / 1.4 | 48% | 0.659 | 35% | −2.2 / 4.0 | +0.1 / 1.4 |
+| box_h7_hybrid | 0.620 | 24% | +0.5 / 2.2 | 62% | +0.1 / 1.4 | 48% | 0.613 | 22% | +0.5 / 2.2 | +0.1 / 1.4 |
+| box_h7 | 0.603 | 20% | −2.0 / 3.8 | 44% | +0.1 / 1.4 | 49% | 0.593 | 18% | −2.2 / 4.0 | +0.1 / 1.4 |
+| default | 0.577 | 14% | +0.6 / 2.0 | 63% | +1.6 / 2.5 | 32% | 0.576 | 14% | +0.6 / 2.0 | +1.6 / 2.5 |
+| default_snap | 0.562 | 13% | +0.7 / 2.1 | 62% | +1.8 / 2.6 | 32% | 0.562 | 12% | +0.7 / 2.1 | +1.8 / 2.6 |
+| box_h7_snap | 0.515 | 10% | −2.4 / 4.1 | 42% | +0.8 / 1.6 | 45% | 0.519 | 10% | −2.2 / 4.1 | +0.8 / 1.6 |
+| box_h7_dino_snap | 0.488 | 10% | −4.0 / 5.3 | 31% | +0.2 / 1.6 | 43% | 0.489 | 9% | −4.0 / 5.2 | +0.2 / 1.6 |
+
+Jitter barely changes the size errors; it lowers IoU by moving the box. True vehicles are 21 px long (18–25 for the middle 80%) and 9 px wide (7–10), so the best setting's errors are about 10% of the length and 17% of the width. In that run the 31 boxes fixed by the geometric correction are the weak spot: mean IoU 0.67 and about 4 px short, since they take a neighbouring car's size. (They used to copy its angle too, and 12 of them ended up more than 45° off; they now keep the SAM box's direction, median angle error 3.1°.)
+
+**Holdout** (121 images, 239 vehicles). Length and width columns are median absolute errors in px:
 
 | Setting | Exact: IoU | Exact: \|length error\| (px) | Exact: \|width error\| (px) | 3 × 1 jitter: IoU | Jitter: \|length error\| (px) | Jitter: \|width error\| (px) |
 |---|---|---|---|---|---|---|
-| default | 0.575 | 1.2 | 2.0 | 0.578 | 1.3 | 2.0 |
+| default | 0.577 | 1.3 | 2.0 | 0.579 | 1.3 | 2.0 |
 | box_h7 | 0.590 | 2.6 | 1.0 | 0.590 | 2.6 | 1.0 |
 | box_h7_center | 0.715 | 2.6 | 1.0 | 0.659 | 2.6 | 1.0 |
-| box_h7_hybrid_keepaxis | 0.610 | 1.3 | 1.0 | 0.607 | 1.4 | 1.0 |
+| box_h7_hybrid_keepaxis | 0.612 | 1.3 | 1.0 | 0.611 | 1.4 | 1.0 |
+| box_h7_hybrid_center | **0.747** | 1.4 | 1.0 | **0.692** | 1.4 | 1.0 |
 | box_h7_hybrid_center_keepaxis | **0.747** | 1.4 | 1.0 | **0.692** | 1.4 | 1.0 |
 
-Tune split (2,194 vehicles), exact points (medians): default IoU 0.576, length 1.4, width 2.0; box_h7 IoU 0.603, length 2.4, width 1.0. box_h7_center didn't finish; the two `keepaxis` settings and the 3 × 1 jittered tune set are next.
+**box_h7_hybrid_center, holdout (121 images) vs. tune split (1,125 images)** (exact points; the same setting as the VEDAI example in step 2):
 
-Findings so far:
+| Metric | Holdout (239 vehicles) | Tune split (2,194 vehicles) |
+|---|---|---|
+| Mean IoU | 0.730 | 0.736 |
+| Median IoU | 0.747 | 0.761 |
+| IoU ≥ 0.5 | 94% | 96% |
+| IoU ≥ 0.7 | 67% | 69% |
+| Length: median / mean absolute error | +0.0 / 2.19 px | +0.5 / 2.17 px |
+| Length within 2 px | 61% | 61% |
+| Width: median / mean absolute error | +0.1 / 1.45 px | +0.2 / 1.43 px |
+| Width within 1 px | 47% | 47% |
+| Median angle error | 2.6° | 2.4° |
+| Boxes: sam / corrected / fallback / unmatched | 235 / 4 / 0 / 0 | 2159 / 31 / 4 / 0 |
+
+The holdout is at most 0.014 lower (median IoU 0.747 vs 0.761), so the setting isn't overfit to the tune split. Both splits use the current correction head, which keeps the SAM box's direction (on the tune split only the images with corrected boxes were rerun for it; the holdout was rerun in full). With 3 × 1 px jitter the holdout median IoU is 0.692 (mean 0.685).
+
+Findings:
 - **The box prompt** (`--box-prompt --box-half-size 7`, a 14 px box) beats the point prompt on both splits, but its boxes come out about 2 px short.
-- **`--two-pass`** fixes the length (median length error 0 px) without making boxes wider. With its checks and `--keep-axis-aligned`, the boxes more than 20° off dropped from 12 to 5 of 239 holdout vehicles (box_h7 has 6).
+- **`--two-pass`** fixes the length (median length error 0 px) without making boxes wider. With its checks, 3 of 239 holdout boxes are more than 20° off (box_h7 has 5).
 - **`--center-on-point`** scores highest with exact points because it copies the true center from the input. With 3 × 1 px jitter it loses some of that (median IoU 0.747 → 0.692) but is still the best setting, since the point stays within 1 px of the car's center line. With points up to 4 px off in any direction (the earlier study), it dropped below the 5-point prompt (holdout mean IoU 0.501–0.530 against 0.538). So it suits points on the car's center line, and hurts if they can be off to the side.
 - **`--snap`, DINOv2 features and `--pick-mask`** lowered IoU. On the tune split with 4 px jitter, snap variants had a mean IoU of 0.46–0.53 against 0.564 for box_h7. `--pick-mask` had 0.613–0.634 against 0.649–0.657 without it on the quick-check set.
 - **The reference:** with no `--ref` and no `ref_car.png` in the input folder (as in these runs), the reference is the input image with the most labels (`00000044_co` for the tune split, `00000027_co` for the holdout), not the COWC crop. On VEDAI it only drives the `low_similarity` flags, which almost never fire (0 of 2,194 tune vehicles).
