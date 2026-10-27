@@ -359,17 +359,6 @@ The numbers come from the `evaluation_all_fold01.csv` files behind each set's `s
 | box_h7_snap | `--box-prompt --box-half-size 7 --snap` |
 | box_h7_dino_snap | `--box-prompt --box-half-size 7 --features dino --snap` |
 
-**Holdout** (121 images, 239 vehicles). Length and width columns are median absolute errors in px:
-
-| Setting | Exact: IoU | Exact: \|length error\| (px) | Exact: \|width error\| (px) | 3 × 1 jitter: IoU | Jitter: \|length error\| (px) | Jitter: \|width error\| (px) |
-|---|---|---|---|---|---|---|
-| default | 0.577 | 1.3 | 2.0 | 0.579 | 1.3 | 2.0 |
-| box_h7 | 0.590 | 2.6 | 1.0 | 0.590 | 2.6 | 1.0 |
-| box_h7_center | 0.715 | 2.6 | 1.0 | 0.659 | 2.6 | 1.0 |
-| box_h7_hybrid_keepaxis | 0.612 | 1.3 | 1.0 | 0.611 | 1.4 | 1.0 |
-| box_h7_hybrid_center | **0.747** | 1.4 | 1.0 | **0.692** | 1.4 | 1.0 |
-| box_h7_hybrid_center_keepaxis | **0.747** | 1.4 | 1.0 | **0.692** | 1.4 | 1.0 |
-
 **Tune split** (1,125 images, 2,194 vehicles; full tables in `VEDAI_tune/sweep_summary.txt` and `VEDAI_tune_jitterL3W1/sweep_summary.txt`). The length and width columns are signed median error / mean absolute error in px, then the share of vehicles within 2 px (length) or 1 px (width). The `keepaxis` settings are left out: they gave exactly the same labels as their pairs without it, on the tune split and on the holdout.
 
 | Setting | Exact: IoU | IoU ≥ 0.7 | Length (px) | ≤ 2 px | Width (px) | ≤ 1 px | 3 × 1 jitter: IoU | IoU ≥ 0.7 | Length (px) | Width (px) |
@@ -385,6 +374,17 @@ The numbers come from the `evaluation_all_fold01.csv` files behind each set's `s
 | box_h7_dino_snap | 0.488 | 10% | −4.0 / 5.3 | 31% | +0.2 / 1.6 | 43% | 0.489 | 9% | −4.0 / 5.2 | +0.2 / 1.6 |
 
 Jitter barely changes the size errors; it lowers IoU by moving the box. True vehicles are 21 px long (18–25 for the middle 80%) and 9 px wide (7–10), so the best setting's errors are about 10% of the length and 17% of the width. In that run the 31 boxes fixed by the geometric correction are the weak spot: mean IoU 0.67 and about 4 px short, since they take a neighbouring car's size. (They used to copy its angle too, and 12 of them ended up more than 45° off; they now keep the SAM box's direction, median angle error 3.1°.)
+
+**Holdout** (121 images, 239 vehicles). Length and width columns are median absolute errors in px:
+
+| Setting | Exact: IoU | Exact: \|length error\| (px) | Exact: \|width error\| (px) | 3 × 1 jitter: IoU | Jitter: \|length error\| (px) | Jitter: \|width error\| (px) |
+|---|---|---|---|---|---|---|
+| default | 0.577 | 1.3 | 2.0 | 0.579 | 1.3 | 2.0 |
+| box_h7 | 0.590 | 2.6 | 1.0 | 0.590 | 2.6 | 1.0 |
+| box_h7_center | 0.715 | 2.6 | 1.0 | 0.659 | 2.6 | 1.0 |
+| box_h7_hybrid_keepaxis | 0.612 | 1.3 | 1.0 | 0.611 | 1.4 | 1.0 |
+| box_h7_hybrid_center | **0.747** | 1.4 | 1.0 | **0.692** | 1.4 | 1.0 |
+| box_h7_hybrid_center_keepaxis | **0.747** | 1.4 | 1.0 | **0.692** | 1.4 | 1.0 |
 
 **box_h7_hybrid_center, holdout (121 images) vs. tune split (1,125 images)** (exact points; the same setting as the VEDAI example in step 2):
 
